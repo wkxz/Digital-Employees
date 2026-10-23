@@ -1,9 +1,10 @@
 id: F01
-name: 检索工具超时 2 次后重试成功
+name: 指标计算服务超时 2 次后重试成功
 category: 故障
+# 故障注入在程序必调的工具上，不依赖模型是否调用某个工具
 input:
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
-  faults: [{tool: search_minutes, mode: timeout, times: 2}]
+  faults: [{tool: compute_kpis, mode: timeout, times: 2}]
 steps:
-  - expect: {state: PENDING_REVIEW, event_min: {tool_failed: 2}}
+  - expect: {state: PENDING_REVIEW, event_min: {tool_failed: 2}, step_runs: {kpi: 1}}

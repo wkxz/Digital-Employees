@@ -50,18 +50,22 @@ def run_agent_step(llm: LLM, gateway: Any, emit: Emit, *, step_id: str, purpose:
     for turn in range(1, max_turns + 1):
         if time.monotonic() - t0 > max_seconds:
             raise StepLimitExceeded(f"步骤用时超过上限 {max_seconds:.0f} 秒")
+        last_turn = turn == max_turns and max_turns > 1
+        if last_turn:  # 最后一轮：收回工具，要求基于已有信息直接给出结果，而不是继续检索
+            messages.append({"role": "user", "content": "已到本步骤的最后一轮。不要再调用工具，请基于已获得的信息立即输出最终 JSON；"
+                                                        "没有依据的原因写“原因待确认”。"})
         c0 = time.monotonic()
-        resp = llm.chat(messages, tool_defs, {**meta, "turn": turn})
+        resp = llm.chat(messages, [] if last_turn else tool_defs, {**meta, "turn": turn, "wrap_up": last_turn})
         ms = int((time.monotonic() - c0) * 1000)
         emit("model_called", step_id, {
             "model": llm.name, "purpose": purpose, "turn": turn, "ms": ms, "usage": resp.usage,
             "prompt_sha": hashlib.sha256(json.dumps(messages, ensure_ascii=False).encode()).hexdigest()[:12],
             "tool_calls": [{"name": c.name, "args": c.arguments} for c in resp.tool_calls],
-            "content_preview": (resp.content or "")[:300],
+            "content_preview": (resp.content or "")[:300], "wrap_up": last_turn,
         })
         if time.monotonic() - t0 > max_seconds:
             raise StepLimitExceeded(f"步骤用时超过上限 {max_seconds:.0f} 秒")
-        if resp.tool_calls:
+        if resp.tool_calls and not last_turn:
             messages.append({"role": "assistant", "content": resp.content or "", "tool_calls": [
                 {"id": c.id, "type": "function",
                  "function": {"name": c.name, "arguments": json.dumps(c.arguments, ensure_ascii=False)}}

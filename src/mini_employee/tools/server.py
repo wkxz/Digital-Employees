@@ -151,7 +151,7 @@ def query_kpi(
     src = _inside(task_dir, "work/kpis.json")
     if not src.exists():
         raise ToolError(encode(MISSING_INPUT, "尚未计算 KPI"))
-    flat = read_json(src)["flat"]
+    flat = R.anomaly_flat(read_json(src))  # 含 anomaly.A1.* 等异常占位符，与渲染时可用的键一致
     hits = {k: fmt_value(k, v) for k, v in flat.items() if k == prefix or k.startswith(prefix + ".")}
     if not hits:
         heads = sorted({".".join(k.split(".")[:2]) for k in flat})

@@ -81,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("paths", nargs="*", default=["cases"])
     p.add_argument("--report", default="reports/case_report.md")
     p.add_argument("-k", dest="only", help="只运行 id 包含该字符串的用例")
+    p.add_argument("-j", dest="jobs", type=int, default=1, help="并行进程数（真实模型建议 4）")
 
     a = ap.parse_args(argv)
     o = Orchestrator() if a.cmd not in ("transitions", "tools", "cases", "check-model") else None
@@ -157,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("  入参：" + json.dumps(fn["parameters"].get("properties", {}), ensure_ascii=False)[:300])
         elif a.cmd == "cases":
             from .runner import run_cases
-            return run_cases(a.paths, a.report, a.only)
+            return run_cases(a.paths, a.report, a.only, a.jobs)
     except IllegalTransition as e:
         print(f"操作被拒绝：{e}", file=sys.stderr)
         return 2

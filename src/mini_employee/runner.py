@@ -207,24 +207,43 @@ def load_cases(paths: list[str]) -> list[dict[str, Any]]:
     return [{**yaml.safe_load(f.read_text(encoding="utf-8")), "_file": f.name} for f in files]
 
 
-def run_cases(paths: list[str], report: str, only: str | None = None) -> int:
+def _run_one(c: dict[str, Any], workdir: Path) -> dict[str, Any]:
+    t0 = time.monotonic()
+    try:
+        res = run_case(c, workdir)
+        ok, msg, log = True, "", res["log"]
+    except CaseSkipped as e:
+        ok, msg, log = None, str(e), []
+    except Exception as e:  # noqa: BLE001
+        ok, msg, log = False, f"{type(e).__name__}: {e}", [traceback.format_exc(limit=3)]
+    return {"id": c["id"], "name": c["name"], "category": c.get("category", ""), "ok": ok, "msg": msg,
+            "sec": time.monotonic() - t0, "log": log, "dir": str(workdir)}
+
+
+def run_cases(paths: list[str], report: str, only: str | None = None, jobs: int = 1) -> int:
+    """jobs > 1 时多进程并行（真实模型下用例耗时长）；每条用例在独立进程和目录中运行。"""
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
     cases = [c for c in load_cases(paths) if not only or only in c["id"]]
     (ROOT / "runs").mkdir(exist_ok=True)
     base = Path(tempfile.mkdtemp(prefix="cases-", dir=ROOT / "runs"))
     rows = []
-    for c in cases:
-        t0 = time.monotonic()
-        try:
-            res = run_case(c, base / c["id"])
-            ok, msg, log = True, "", res["log"]
-        except CaseSkipped as e:
-            ok, msg, log = None, str(e), []
-        except Exception as e:  # noqa: BLE001
-            ok, msg, log = False, f"{type(e).__name__}: {e}", [traceback.format_exc(limit=3)]
-        dt = time.monotonic() - t0
-        rows.append({"id": c["id"], "name": c["name"], "category": c.get("category", ""), "ok": ok, "msg": msg,
-                     "sec": dt, "log": log})
-        print(f"{'⏭️' if ok is None else '✅' if ok else '❌'} {c['id']:<5} {c.get('category', ''):<5} {c['name']}  ({dt:.1f}s) {msg}")
+
+    def show(r: dict[str, Any]) -> None:
+        mark = "⏭️" if r["ok"] is None else "✅" if r["ok"] else "❌"
+        print(f"{mark} {r['id']:<5} {r['category']:<5} {r['name']}  ({r['sec']:.1f}s) {r['msg']}", flush=True)
+
+    if jobs <= 1:
+        for c in cases:
+            rows.append(_run_one(c, base / c["id"]))
+            show(rows[-1])
+    else:
+        with ProcessPoolExecutor(max_workers=jobs) as ex:
+            futs = [ex.submit(_run_one, c, base / c["id"]) for c in cases]
+            for f in as_completed(futs):
+                rows.append(f.result())
+                show(rows[-1])
+        rows.sort(key=lambda r: r["id"])
     ran = [r for r in rows if r["ok"] is not None]
     passed = sum(bool(r["ok"]) for r in ran)
     print(f"\n通过 {passed}/{len(ran)}（跳过 {len(rows) - len(ran)}），工作目录 {base}")

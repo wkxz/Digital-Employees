@@ -1,11 +1,11 @@
 id: F02
-name: 检索服务持续不可用 → 暂停说明进度 → 恢复后从失败步骤继续（赛题场景 2）
+name: 指标计算服务持续不可用 → 暂停说明进度 → 恢复后从失败步骤继续（赛题场景 2）
 category: 故障
 input:
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
-  faults: [{tool: search_minutes, mode: error}]
+  faults: [{tool: compute_kpis, mode: error}]
 steps:
-  - expect: {state: SUSPENDED, pause_contains: [search_minutes, 已重试 3 次, 已完成 4/7 步]}
+  - expect: {state: SUSPENDED, pause_contains: [compute_kpis, 已重试 3 次, 已完成 1/7 步, 重试将从第 2 步继续]}
   - retry: {clear_faults: true}
-  - expect: {state: PENDING_REVIEW, step_runs: {load: 1, kpi: 1, minutes: 1, charts: 1, analysis: 2}}
+  - expect: {state: PENDING_REVIEW, step_runs: {load: 1, kpi: 2, minutes: 1, charts: 1, analysis: 1}}

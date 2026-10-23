@@ -66,7 +66,7 @@ class MockLLM:
         tool_names = {t["function"]["name"] for t in tools}
         purpose = meta.get("purpose")
 
-        if "loop_tools" in self.faults and "query_kpi" in tool_names:
+        if "loop_tools" in self.faults:  # 模拟不听指挥的模型：最后一轮收回工具后仍要求调用工具
             return self._call("query_kpi", {"prefix": "total"}, turn)
         if "forbidden_tool" in self.faults and turn == 1:
             return self._call("generate_report", {"content_path": "x", "version_tag": "hack"}, turn)

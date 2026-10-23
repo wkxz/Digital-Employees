@@ -53,6 +53,11 @@ def overview(kpis: dict[str, Any]) -> dict[str, Any]:
                   "sales_direction": _direction(f["total.sales_wow"]), "sales_wow_value": f["total.sales_wow"]},
         "has_orders": "total.orders" in f,
         "regions": rows("region"), "categories": rows("category"),
+        # 日趋势只能依据这里的数据描述，不得推测
+        "daily": [{"date": d["date"], "weekday": f"周{d['weekday']}", "sales": fmt_value("sales", d["sales"]),
+                   "last_week_same_day": fmt_value("sales", d["sales_prev"]),
+                   "change": fmt_value("x_wow", d["sales"] / d["sales_prev"] - 1 if d["sales_prev"] else None)}
+                  for d in kpis.get("daily", [])],
         "best_store": {"name": best["name"], "sales_wow": fmt_value("x_wow", best["sales_wow"])} if best else None,
         "worst_store": {"name": worst["name"], "sales_wow": fmt_value("x_wow", worst["sales_wow"])} if worst else None,
     }
@@ -101,6 +106,26 @@ def action_items(minutes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         where = f"{m.get('section', '')} {m.get('header') or ''}"
         if ACTION_SECTION.search(where) or m["text"].startswith(("下周计划", "行动项", "决议")):
             out.append({"no": m["no"], "ref": m.get("ref"), "text": m["text"].rstrip("；;。")})
+    return out
+
+
+def placeholder_table(kpis: dict[str, Any]) -> dict[str, str]:
+    """写作常用的占位符及其当前值，直接给模型，免去逐个 query_kpi 查询。门店只给环比最高 / 最低各 3 家及异常相关门店。"""
+    from .render import anomaly_flat
+    flat = anomaly_flat(kpis)
+    stores = sorted((r for r in kpis["tables"]["store"] if r["sales_wow"] is not None), key=lambda r: r["sales_wow"])
+    keep_stores = {r["name"] for r in stores[:3] + stores[-3:]}
+    keep_stores |= {d["store"] for a in kpis["anomalies"] for d in a["drivers"]}
+    out = {}
+    for k, v in flat.items():
+        head = k.split(".")[0]
+        if head == "store" and k.split(".")[1] not in keep_stores:
+            continue
+        if head == "rc" and not any(a["dimension"] == "rc" and k.startswith(f"rc.{a['entity']}.") for a in kpis["anomalies"]):
+            continue
+        if k.rsplit(".", 1)[-1] in ("sales", "sales_prev", "sales_wow", "share", "qty", "qty_wow", "orders",
+                                     "orders_wow", "atv", "atv_wow", "stores", "impact"):
+            out[k] = fmt_value(k, v)
     return out
 
 

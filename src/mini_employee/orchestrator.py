@@ -17,7 +17,7 @@ from .fsutil import read_json, sha256_file, sha256_json, write_json
 from .llm import LLMUnavailable, build_llm
 from .llm.agent import MissingInput, StepLimitExceeded, run_agent_step
 from .payloads import (DRAFT_SECTIONS, OUTPUT_SCHEMAS, PLACEHOLDER_HELP, action_items, anomaly_inputs, overview,
-                       parse_feedback)
+                       parse_feedback, placeholder_table)
 from .periods import parse_week, today
 from .qc.engine import append_record, blocking_failures, now, program_fix, run_rules
 from .qc.rules import QCContext
@@ -410,9 +410,11 @@ class Orchestrator:
         todos = fb["todos"] if fb else None
         if purpose == "analysis":
             prev = self._out(tid, f"analysis@v{version - 1}") if fb else None
+            minutes = read_json(self.task_dir(tid) / "work" / "minutes.json")
             payload = {"period": kpis["period"], "period_label": kpis["period_label"],
-                       "anomalies": anomaly_inputs(kpis), "minutes_count": len(read_json(
-                           self.task_dir(tid) / "work" / "minutes.json")),
+                       "anomalies": anomaly_inputs(kpis), "minutes_count": len(minutes),
+                       # 纪要通常很短，直接给全文，避免模型反复检索；过长时只给条数，由模型用 search_minutes 检索
+                       "minutes": minutes if sum(len(m["text"]) for m in minutes) <= 8000 else None,
                        "feedback": todos, "feedback_raw": fb["comments"] if fb else None, "previous": prev}
         else:
             analysis = self._out(tid, f"analysis@v{version}")
@@ -428,6 +430,7 @@ class Orchestrator:
                                "direction": labels.get(it["id"], {}).get("direction", "")}
                               for it in analysis.get("anomalies", [])],
                 "action_items": action_items(read_json(self.task_dir(tid) / "work" / "minutes.json")),
+                "placeholders": placeholder_table(kpis),
                 "placeholders_help": PLACEHOLDER_HELP,
                 "feedback": todos, "feedback_raw": fb["comments"] if fb else None, "previous": prev,
             }
@@ -514,7 +517,7 @@ class Orchestrator:
                         system=emp.skill("岗位职责", "撰写周报", "注意事项") +
                         "\n\n## 质检修正\n根据 failures 中列出的问题修改 content，只改有问题的句子，其余保持不变，输出完整的 content。",
                         payload={"content": content, "failures": remaining, "overview": overview(kpis),
-                                 "placeholders_help": PLACEHOLDER_HELP},
+                                 "placeholders": placeholder_table(kpis), "placeholders_help": PLACEHOLDER_HELP},
                         tools=["query_kpi"], output_schema=OUTPUT_SCHEMAS["fix"],
                         max_turns=emp.limits["max_model_turns_per_step"], max_seconds=emp.limits["max_step_seconds"])
                 except (StepLimitExceeded, LLMUnavailable, ToolFailure, MissingInput) as e:

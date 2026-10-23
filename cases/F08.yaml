@@ -1,0 +1,12 @@
+id: F08
+name: Mock 模型检索纪要时检索服务不可用 → 暂停 → 恢复后继续
+category: 故障
+mock_only: true   # 真实模型已直接拿到纪要全文，通常不调用检索工具
+input:
+  period: 2026-W44
+  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  faults: [{tool: search_minutes, mode: error}]
+steps:
+  - expect: {state: SUSPENDED, pause_contains: [search_minutes, 已完成 4/7 步]}
+  - retry: {clear_faults: true}
+  - expect: {state: PENDING_REVIEW, step_runs: {load: 1, kpi: 1, analysis: 2}}
