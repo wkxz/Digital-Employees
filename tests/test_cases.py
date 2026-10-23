@@ -10,4 +10,5 @@ CASES = load_cases(["cases"])
 def test_case(case, tmp_path, monkeypatch):
     for k in ("MINI_RUNS", "MINI_TODAY"):
         monkeypatch.setenv(k, "")
+    monkeypatch.setenv("MINI_MODEL", "mock")
     run_case(case, tmp_path / case["id"])

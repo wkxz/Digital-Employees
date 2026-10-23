@@ -26,6 +26,16 @@ class CaseFailed(AssertionError):
     pass
 
 
+class CaseSkipped(Exception):
+    pass
+
+
+def is_mock() -> bool:
+    from .config import load_employee
+    from .llm import current_provider
+    return current_provider(load_employee("weekly_report").raw.get("model", {})) == "mock"
+
+
 def _report_text(o, tid: str) -> str:
     from docx import Document
 
@@ -54,10 +64,14 @@ def _check(o, tid: str, exp: dict[str, Any]) -> None:
             s = str(s)
             if s not in (t["pause_reason"] or ""):
                 errs.append(f"暂停说明应包含“{s}”，实际：{t['pause_reason']}")
-    if "report_contains" in exp or "report_not_contains" in exp:
+    if any(k in exp for k in ("report_contains", "report_not_contains", "report_contains_mock",
+                                  "report_not_contains_mock")):
         text = _report_text(o, tid)
-        errs += [f"报告缺少“{s}”" for s in exp.get("report_contains", []) if s not in text]
-        errs += [f"报告不应出现“{s}”" for s in exp.get("report_not_contains", []) if s in text]
+        # *_mock：Mock 模型的固定措辞，真实模型会换说法，只在 Mock 下检查；不带后缀的是事实或程序生成的文字，始终检查
+        contains = exp.get("report_contains", []) + (exp.get("report_contains_mock", []) if is_mock() else [])
+        absent = exp.get("report_not_contains", []) + (exp.get("report_not_contains_mock", []) if is_mock() else [])
+        errs += [f"报告缺少“{s}”" for s in contains if s not in text]
+        errs += [f"报告不应出现“{s}”" for s in absent if s in text]
     types = [e["type"] for e in o.store.events(tid)]
     errs += [f"缺少事件 {e}" for e in exp.get("events", []) if e not in types]
     for et, n in (exp.get("event_min") or {}).items():
@@ -84,8 +98,8 @@ def _check(o, tid: str, exp: dict[str, Any]) -> None:
     if exp.get("qc_all_blocking_passed"):
         rounds = read_json(o.task_dir(tid) / "qc" / "qc_report.json")["rounds"]
         bad = [r["rule"] for r in rounds[-1]["results"] if not r["passed"] and r["severity"] == "blocking"]
-        if bad or len(rounds) != 1:
-            errs.append(f"应一次质检全部通过，实际 {len(rounds)} 轮，最后未通过：{bad}")
+        if bad or (is_mock() and len(rounds) != 1):  # 真实模型允许经自动修正后通过
+            errs.append(f"质检应全部通过，实际 {len(rounds)} 轮，最后未通过：{bad}")
     for sid, n in (exp.get("step_runs") or {}).items():
         runs = sum(1 for e in o.store.events(tid, ["step_started"]) if e["step_id"] == sid)
         if runs != n:
@@ -108,6 +122,8 @@ def run_case(case: dict[str, Any], workdir: Path) -> dict[str, Any]:
     os.environ.update({k: str(v) for k, v in (case.get("env") or {}).items()})
     from .orchestrator import Orchestrator
 
+    if case.get("mock_only") and not is_mock():
+        raise CaseSkipped("依赖 Mock 模型注入的错误，真实模型下跳过")
     o = Orchestrator()
     inp = case["input"]
     tid = o.create(inp.get("employee", "weekly_report"), {"period": inp.get("period"), **(inp.get("fields") or {})},
@@ -169,8 +185,12 @@ def run_case(case: dict[str, Any], workdir: Path) -> dict[str, Any]:
             o.drive(clean)
             a = read_json(o.task_dir(tid) / o.store.get(tid)["artifact"]["content_path"])
             b = read_json(o.task_dir(clean) / o.store.get(clean)["artifact"]["content_path"])
-            if a != b:
+            if is_mock() and a != b:
                 raise CaseFailed("断点恢复后的结果与一次跑完的结果不一致")
+            ka = read_json(o.task_dir(tid) / "work" / "kpis.json")
+            kb = read_json(o.task_dir(clean) / "work" / "kpis.json")
+            if ka["flat"] != kb["flat"] or [x["id"] for x in a["anomalies"]] != [x["id"] for x in b["anomalies"]]:
+                raise CaseFailed("断点恢复后的数字或异常列表与一次跑完的不一致")
             log.append("断点恢复结果与一次跑完一致")
             continue
         else:
@@ -197,25 +217,34 @@ def run_cases(paths: list[str], report: str, only: str | None = None) -> int:
         try:
             res = run_case(c, base / c["id"])
             ok, msg, log = True, "", res["log"]
+        except CaseSkipped as e:
+            ok, msg, log = None, str(e), []
         except Exception as e:  # noqa: BLE001
             ok, msg, log = False, f"{type(e).__name__}: {e}", [traceback.format_exc(limit=3)]
         dt = time.monotonic() - t0
         rows.append({"id": c["id"], "name": c["name"], "category": c.get("category", ""), "ok": ok, "msg": msg,
                      "sec": dt, "log": log})
-        print(f"{'✅' if ok else '❌'} {c['id']:<5} {c.get('category', ''):<5} {c['name']}  ({dt:.1f}s) {msg}")
-    passed = sum(r["ok"] for r in rows)
-    print(f"\n通过 {passed}/{len(rows)}，工作目录 {base}")
+        print(f"{'⏭️' if ok is None else '✅' if ok else '❌'} {c['id']:<5} {c.get('category', ''):<5} {c['name']}  ({dt:.1f}s) {msg}")
+    ran = [r for r in rows if r["ok"] is not None]
+    passed = sum(bool(r["ok"]) for r in ran)
+    print(f"\n通过 {passed}/{len(ran)}（跳过 {len(rows) - len(ran)}），工作目录 {base}")
     out = Path(report) if Path(report).is_absolute() else ROOT / report
     out.parent.mkdir(parents=True, exist_ok=True)
     cats: dict[str, list[bool]] = {}
-    for r in rows:
-        cats.setdefault(r["category"], []).append(r["ok"])
-    lines = [f"# 自测用例运行报告", "", f"运行时间：{time.strftime('%Y-%m-%d %H:%M:%S')}　模型：{os.environ.get('MINI_MODEL', '员工配置')}",
-             f"", f"**通过 {passed}/{len(rows)}**", "", "| 类别 | 通过 / 总数 |", "|---|---|"]
+    for r in ran:
+        cats.setdefault(r["category"], []).append(bool(r["ok"]))
+    from .config import load_employee
+    from .llm import resolved_config
+    mc = resolved_config(load_employee("weekly_report").raw.get("model", {}))
+    model = "mock（离线规则模型）" if mc["provider"] == "mock" else f"{mc['provider']} / {mc.get('model')}"
+    lines = ["# 自测用例运行报告", "", f"运行时间：{time.strftime('%Y-%m-%d %H:%M:%S')}　模型：{model}",
+             "", f"**通过 {passed}/{len(ran)}**" + (f"（{len(rows) - len(ran)} 条仅适用于 Mock 的用例已跳过）"
+                                                  if len(ran) < len(rows) else ""), "",
+             "| 类别 | 通过 / 总数 |", "|---|---|"]
     lines += [f"| {k} | {sum(v)}/{len(v)} |" for k, v in cats.items()]
     lines += ["", "| 用例 | 类别 | 名称 | 结果 | 耗时 | 说明 |", "|---|---|---|---|---|---|"]
-    lines += [f"| {r['id']} | {r['category']} | {r['name']} | {'通过' if r['ok'] else '未通过'} | {r['sec']:.1f}s | "
+    lines += [f"| {r['id']} | {r['category']} | {r['name']} | {'跳过' if r['ok'] is None else '通过' if r['ok'] else '未通过'} | {r['sec']:.1f}s | "
               f"{r['msg'].replace('|', '/') or '；'.join(r['log'][1:])[:200]} |" for r in rows]
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"报告：{out}")
-    return 0 if passed == len(rows) else 1
+    return 0 if passed == len(ran) else 1

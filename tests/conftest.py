@@ -13,7 +13,7 @@ def isolated_runs(tmp_path, monkeypatch):
     monkeypatch.setenv("MINI_TODAY", "2026-11-03")
     monkeypatch.setenv("MINI_FAST", "1")
     monkeypatch.delenv("MINI_FAULTS", raising=False)
-    monkeypatch.delenv("MINI_MODEL", raising=False)
+    monkeypatch.setenv("MINI_MODEL", "mock")  # 单元测试固定用 Mock；真实模型用 mini cases 跑
     yield tmp_path
 
 

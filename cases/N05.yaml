@@ -7,6 +7,6 @@ input:
 steps:
   - expect: {state: PENDING_REVIEW}
   - review: {decision: changes, comments: "摘要改为3条；整体经营部分补充客单价分析"}
-  - expect: {state: PENDING_REVIEW, version: 2, report_contains: [按审核意见补充客单价分析]}
+  - expect: {state: PENDING_REVIEW, version: 2, report_contains_mock: [按审核意见补充客单价分析]}
   - review: {decision: approve}
   - expect: {state: DELIVERED, step_runs: {analysis: 1, draft: 2}}

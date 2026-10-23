@@ -10,13 +10,14 @@ from .base import LLMResponse, LLMUnavailable, ToolCall
 
 
 class OpenAICompatLLM:
-    def __init__(self, provider: str, base_url: str, model: str, api_key_env: str, temperature: float = 0.2,
-                 timeout: float = 60, max_retries: int = 2, faults: list[dict] | None = None, **_: Any):
+    def __init__(self, provider: str, base_url: str, model: str, api_key_env: str = "MINI_API_KEY",
+                 api_key: str | None = None, temperature: float = 0.2, timeout: float = 60, max_retries: int = 2,
+                 faults: list[dict] | None = None, **_: Any):
         import openai
 
-        key = os.environ.get(api_key_env)
+        key = api_key or os.environ.get(api_key_env)
         if not key:
-            raise LLMUnavailable(f"未设置环境变量 {api_key_env}，无法调用 {provider} 模型")
+            raise LLMUnavailable(f"未配置 API Key：请在 .env 中填写 MINI_API_KEY（或 {api_key_env}）")
         self.name = f"{provider}:{model}"
         self.model, self.temperature, self.max_retries = model, temperature, max_retries
         self.client = openai.OpenAI(api_key=key, base_url=base_url, timeout=timeout, max_retries=0)
@@ -48,4 +49,11 @@ class OpenAICompatLLM:
                     self._openai.InternalServerError) as e:
                 last = e
                 time.sleep(0 if os.environ.get("MINI_FAST") else 2 ** attempt)
-        raise LLMUnavailable(f"模型接口不可用：{last}")
+            except self._openai.APIStatusError as e:  # 401 密钥错误、400 参数不被支持等：重试无用，直接暂停并说明
+                raise LLMUnavailable(f"模型接口返回 {e.status_code}：{_short(e)}") from e
+        raise LLMUnavailable(f"模型接口不可用（已重试 {self.max_retries} 次）：{_short(last)}")
+
+
+def _short(e: Exception | None, n: int = 200) -> str:
+    s = str(e or "")
+    return s if len(s) <= n else s[:n] + "…"

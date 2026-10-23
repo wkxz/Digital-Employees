@@ -22,24 +22,27 @@ steps:
         region.华东.share: 0.1357
         rc.华南.生鲜食品.sales_wow: 0.3314
       anomaly_labels: [华东区, 华南区生鲜食品]
-      report_contains:
+      report_contains:            # 事实（来自纪要）与程序生成的文字：任何模型都必须满足
         - 69.9 万元
-        - 区域表现明显分化
         - 海贝思
-        - 上海南京东路店、杭州西湖店停业避险2天
-        - 客流
+        - 停业
         - 秋季生鲜狂欢节
-        - 智利车厘子
-        - 社群秒杀
-        - 剔除华东区后基本持平
         - 数据核对
         - 华东区销售额环比为 -53.35%
         - 华南区生鲜食品销售额环比为 +33.14%，与会上口径不一致
-        - 额度为50万元
+        - 50万元
+        - 周三
+        - 周会纪要 一、1
+      report_contains_mock:       # Mock 模型的固定措辞
+        - 区域表现明显分化
+        - 上海南京东路店、杭州西湖店停业避险2天
+        - 智利车厘子
+        - 社群秒杀
+        - 剔除华东区后基本持平
         - 于周三前给出向西南拓展的可行性报告
         - 数字员工
-        - 周会纪要 一、1
-      report_not_contains: [陈总监, 负责人：, 后续建议将该直采, 日用百货：销售额环比, "{{"]
+      report_not_contains: [陈总监, 日用百货：销售额环比, "{{"]
+      report_not_contains_mock: [负责人：, 后续建议将该直采]
       state_path: [ADMISSION, RUNNING, QC, PENDING_REVIEW]
       qc_all_blocking_passed: true
   - review: {decision: approve}

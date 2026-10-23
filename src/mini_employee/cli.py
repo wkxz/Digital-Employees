@@ -74,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--content", help="修改后的内容 JSON 文件（省略则直接重新质检）")
 
     sub.add_parser("resume", help="恢复所有被中断的任务（断点恢复）")
+    sub.add_parser("check-model", help="检查模型配置：连通性、工具调用、JSON 输出、响应时间")
     p = sub.add_parser("transitions", help="打印状态流转表")
     sub.add_parser("tools", help="列出工具及入参 Schema")
     p = sub.add_parser("cases", help="批量运行测试用例")
@@ -82,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-k", dest="only", help="只运行 id 包含该字符串的用例")
 
     a = ap.parse_args(argv)
-    o = Orchestrator() if a.cmd not in ("transitions", "tools", "cases") else None
+    o = Orchestrator() if a.cmd not in ("transitions", "tools", "cases", "check-model") else None
     try:
         if a.cmd == "new":
             faults = []
@@ -140,6 +141,9 @@ def main(argv: list[str] | None = None) -> int:
                 if not a.full and len(payload) > 160:
                     payload = payload[:160] + "…"
                 print(f"{e['seq']:>4} {e['ts'][11:23]} {e['type']:<20} {e['step_id'] or '':<9} {payload}")
+        elif a.cmd == "check-model":
+            from .llm.check import check_model
+            return check_model()
         elif a.cmd == "transitions":
             print(table_markdown())
         elif a.cmd == "tools":

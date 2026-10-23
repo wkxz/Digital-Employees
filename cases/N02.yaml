@@ -6,6 +6,6 @@ input:
   fields: {focus_region: 华东}
   files: {sales_file: data/fixtures/销售明细_2026W44.csv, minutes_file: data/fixtures/周会纪要_2026W44.md}
 steps:
-  - expect: {state: PENDING_REVIEW, report_contains: [重点关注区域华东区]}
+  - expect: {state: PENDING_REVIEW, report_contains_mock: [重点关注区域华东区]}
   - review: {decision: approve}
   - expect: {state: DELIVERED}

@@ -87,6 +87,7 @@ PLACEHOLDER_HELP = (
     "占位符格式 {{键}}。常用键：total.sales / total.sales_prev / total.sales_wow / total.qty / total.qty_wow / "
     "total.orders / total.atv / total.atv_wow / total.stores；region.<区域>.sales|sales_wow|share；"
     "store.<门店>.sales|sales_wow；category.<品类>.sales|sales_wow|share；anomaly.<A1>.sales|sales_wow|impact。"
+    "跟在“增长/下降”后面时写 {{键|abs}}，去掉正负号。"
 )
 
 

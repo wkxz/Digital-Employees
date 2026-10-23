@@ -14,6 +14,23 @@ from typing import Any
 import yaml
 
 ROOT = Path(os.environ.get("MINI_HOME", Path(__file__).resolve().parents[2]))
+
+
+def load_dotenv(path: Path) -> None:
+    """读取项目根目录的 .env（KEY=VALUE），不覆盖已存在的环境变量。.env 已加入 .gitignore，密钥不会进仓库。"""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k and v and k not in os.environ:
+            os.environ[k] = v
+
+
+load_dotenv(ROOT / ".env")
 EMPLOYEES_DIR = ROOT / "employees"
 ASSETS_DIR = ROOT / "assets"
 

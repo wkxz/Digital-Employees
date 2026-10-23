@@ -14,14 +14,31 @@ PRESETS: dict[str, dict[str, str]] = {
 }
 
 
+def current_provider(model_cfg: dict[str, Any] | None = None) -> str:
+    return os.environ.get("MINI_MODEL") or (model_cfg or {}).get("provider", "mock")
+
+
+def resolved_config(model_cfg: dict[str, Any]) -> dict[str, Any]:
+    """合并顺序：预设 < employee.yaml 的 model 段 < 环境变量 / .env（MINI_BASE_URL、MINI_MODEL_NAME、MINI_API_KEY）。"""
+    provider = current_provider(model_cfg)
+    cfg = {**PRESETS.get(provider, {}), **{k: v for k, v in model_cfg.items() if k != "provider"}}
+    if os.environ.get("MINI_BASE_URL"):
+        cfg["base_url"] = os.environ["MINI_BASE_URL"]
+    if os.environ.get("MINI_MODEL_NAME"):
+        cfg["model"] = os.environ["MINI_MODEL_NAME"]
+    if os.environ.get("MINI_API_KEY"):
+        cfg["api_key"] = os.environ["MINI_API_KEY"]
+    return {"provider": provider, **cfg}
+
+
 def build_llm(model_cfg: dict[str, Any], faults: list[dict] | None = None) -> LLM:
-    """MINI_MODEL 环境变量优先于员工配置；值为 mock / deepseek / qwen / glm / openai_compatible。"""
-    provider = os.environ.get("MINI_MODEL") or model_cfg.get("provider", "mock")
-    if provider == "mock":
+    """MINI_MODEL 环境变量优先于员工配置；值为 mock / openai_compatible / deepseek / qwen / glm。"""
+    cfg = resolved_config(model_cfg)
+    if cfg["provider"] == "mock":
         from .mock import MockLLM
         return MockLLM(faults=faults)
     from .openai_compat import OpenAICompatLLM
-    cfg = {**PRESETS.get(provider, {}), **{k: v for k, v in model_cfg.items() if k != "provider"}}
-    if os.environ.get("MINI_MODEL_NAME"):
-        cfg["model"] = os.environ["MINI_MODEL_NAME"]
-    return OpenAICompatLLM(provider=provider, faults=faults, **cfg)
+    missing = [k for k in ("base_url", "model") if not cfg.get(k)]
+    if missing:
+        raise LLMUnavailable(f"模型配置缺少 {missing}：请在 .env 中填写 MINI_BASE_URL / MINI_MODEL_NAME")
+    return OpenAICompatLLM(faults=faults, **cfg)

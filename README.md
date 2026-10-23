@@ -11,7 +11,7 @@
 
 ```bash
 make install        # 安装依赖（需要 uv）
-make test           # 21 个单元测试 + 39 条用例
+make test           # 单元测试 + 39 条用例 + 真实模型调用路径测试（共 66 项，全部离线）
 make demo           # 命令行跑一条正常任务，停在“待审核”
 make ui             # Web 界面 http://localhost:8501
 ```
@@ -38,14 +38,24 @@ uv run mini tools                       # 工具清单与入参 Schema
 
 ### 接入真实模型
 
-默认使用离线 Mock 模型（规则脚本，走与真实模型相同的工具调用协议），便于无 Key 开发和自测。切换真实模型：
+在项目根目录的 `.env` 中填写（`.env` 已加入 `.gitignore`，不会提交；没有该文件时 `cp .env.example .env`）：
 
-```bash
-export MINI_MODEL=deepseek  DEEPSEEK_API_KEY=sk-...        # 或 qwen + DASHSCOPE_API_KEY，glm + ZHIPU_API_KEY
-export MINI_MODEL_NAME=deepseek-chat                       # 可选，覆盖默认模型名
+```ini
+MINI_MODEL=openai_compatible
+MINI_BASE_URL=https://api.deepseek.com          # 服务商的 OpenAI 兼容地址
+MINI_API_KEY=sk-...
+MINI_MODEL_NAME=deepseek-chat                    # 需支持 Function Calling
 ```
 
-也可以改 `employees/weekly_report/employee.yaml` 的 `model.provider`。任意 OpenAI 兼容接口都可以在 `src/mini_employee/llm/__init__.py` 的 `PRESETS` 中添加。
+然后：
+
+```bash
+uv run mini check-model     # 检查连通性、密钥、工具调用、JSON 输出和响应时间
+uv run mini cases           # 用真实模型跑全部用例（6 条依赖 Mock 注入错误的用例自动跳过）
+```
+
+改回离线 Mock：`.env` 中设 `MINI_MODEL=mock`。单元测试（`make test`）始终使用 Mock，另有一组测试通过本地假 OpenAI 服务覆盖真实模型的 HTTP 调用路径。
+用例中 `report_contains` 检查事实与程序生成的文字，任何模型都须满足；`report_contains_mock` 是 Mock 的固定措辞，真实模型下不检查。
 
 ## 目录
 

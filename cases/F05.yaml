@@ -1,6 +1,7 @@
 id: F05
 name: 质检自动修正 2 轮仍不通过 → 暂停转人工
 category: 故障
+mock_only: true   # 依赖 Mock 模型注入的错误
 input:
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
