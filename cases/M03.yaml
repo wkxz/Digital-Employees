@@ -1,0 +1,10 @@
+id: M03
+name: 销售明细缺“品类”列 → 暂停并列出实际列名
+category: 缺材料
+input:
+  period: 2026-W44
+  files: {sales_file: data/fixtures/销售明细_缺品类列.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+steps:
+  - expect: {state: WAITING_INPUT, pause_contains: [品类, 实际列]}
+  - supplement: {files: {sales_file: data/samples/销售明细_2026W44.xlsx}}
+  - expect: {state: PENDING_REVIEW}

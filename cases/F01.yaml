@@ -1,0 +1,9 @@
+id: F01
+name: 检索工具超时 2 次后重试成功
+category: 故障
+input:
+  period: 2026-W44
+  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  faults: [{tool: search_minutes, mode: timeout, times: 2}]
+steps:
+  - expect: {state: PENDING_REVIEW, event_min: {tool_failed: 2}}

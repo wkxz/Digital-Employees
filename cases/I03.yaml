@@ -1,0 +1,8 @@
+id: I03
+name: 统计周期尚未结束（未来周）→ 拒绝
+category: 不合规
+input:
+  period: 2026-W50
+  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+steps:
+  - expect: {state: REJECTED, pause_contains: 尚未结束}

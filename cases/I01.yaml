@@ -1,0 +1,8 @@
+id: I01
+name: 销售明细含顾客手机号 → 拒绝
+category: 不合规
+input:
+  period: 2026-W44
+  files: {sales_file: data/fixtures/销售明细_含手机号.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+steps:
+  - expect: {state: REJECTED, pause_contains: 个人隐私}

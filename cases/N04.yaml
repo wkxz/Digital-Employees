@@ -1,0 +1,9 @@
+id: N04
+name: 初稿直接写数字 → 程序替换为占位符后质检通过
+category: 正常
+input:
+  period: 2026-W44
+  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  faults: [{tool: mock, mode: hardcode_number}]
+steps:
+  - expect: {state: PENDING_REVIEW, qc_failed_seen: [data_consistency], event_min: {qc_run: 2}}

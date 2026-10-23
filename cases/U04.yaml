@@ -1,0 +1,17 @@
+id: U04
+name: 用户用例：脏数据文件缺“品类”列 → 暂停并列出实际列 → 上传补回品类列的文件后继续
+category: 缺材料
+input:
+  period: 2026-W44
+  files:
+    sales_file: data/user_cases/case_03_dirty_data/销售明细_脏数据.xlsx
+    minutes_file: data/user_cases/case_03_dirty_data/周会纪要_2026W44.docx
+steps:
+  - expect:
+      state: WAITING_INPUT
+      pause_contains: [缺少必需列, 品类, 门店ID]
+  - supplement: {files: {sales_file: "data/user_cases/case_03_dirty_data/销售明细_脏数据_补回品类列（品类取自case_01）.xlsx"}}
+  - expect:
+      state: PENDING_REVIEW
+      kpis: {total.sales: 698896.92, total.sales_prev: 784595.50}
+      report_contains: [被后上传的更正版替代、未使用的文件：销售明细_脏数据.xlsx]

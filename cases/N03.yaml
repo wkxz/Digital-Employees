@@ -1,0 +1,13 @@
+id: N03
+name: 初稿涨跌写反 → 数据一致性质检不通过 → 自动修正后通过
+category: 正常
+input:
+  period: 2026-W44
+  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  faults: [{tool: mock, mode: direction_error}]
+steps:
+  - expect:
+      state: PENDING_REVIEW
+      qc_failed_seen: [data_consistency]
+      event_min: {qc_run: 2}
+      report_contains: [华东区销售额 74.2 万元，环比下降 20.0%]

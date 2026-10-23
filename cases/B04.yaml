@@ -1,0 +1,8 @@
+id: B04
+name: 少量脏数据（重复 / 空值 / 负数 < 5%）清洗后继续，并在附录说明
+category: 边界
+input:
+  period: 2026-W44
+  files: {sales_file: data/fixtures/销售明细_少量脏数据.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+steps:
+  - expect: {state: PENDING_REVIEW, report_contains: [剔除重复]}

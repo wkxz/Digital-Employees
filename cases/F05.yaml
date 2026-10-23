@@ -1,0 +1,10 @@
+id: F05
+name: 质检自动修正 2 轮仍不通过 → 暂停转人工
+category: 故障
+input:
+  period: 2026-W44
+  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  faults: [{tool: mock, mode: direction_error}, {tool: mock, mode: stubborn}]
+steps:
+  - expect: {state: SUSPENDED, pause_contains: 自动修正 2 轮, event_min: {qc_run: 3}}
+  - illegal: {event: approve}

@@ -1,0 +1,10 @@
+id: M02
+name: 缺上周数据无法算环比 → 暂停待补 → 补充后继续
+category: 缺材料
+input:
+  period: 2026-W44
+  files: {sales_file: data/fixtures/销售明细_仅本周.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+steps:
+  - expect: {state: WAITING_INPUT, pause_contains: [2026-W43, 无法计算环比]}
+  - supplement: {files: {sales_file: data/samples/销售明细_2026W44.xlsx}}
+  - expect: {state: PENDING_REVIEW}

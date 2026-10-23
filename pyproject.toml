@@ -1,0 +1,28 @@
+[project]
+name = "mini-employee"
+version = "0.1.0"
+description = "迷你数字员工：可审核、可交付的经营周报 Agent"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=4.1.3",
+    "jsonschema>=4.26.0",
+    "matplotlib>=3.11.2",
+    "openai>=3.37.0",
+    "openpyxl>=3.1.5",
+    "pandas>=3.1.0",
+    "python-docx>=1.2.0",
+    "pyyaml>=6.0.3",
+    "streamlit>=1.66.1",
+]
+
+[project.scripts]
+mini = "mini_employee.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

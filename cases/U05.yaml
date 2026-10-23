@@ -1,0 +1,26 @@
+id: U05
+name: 用户用例：脏数据（-9999 占位值、负销量、停业日销售额为 0）逐行清洗并在附录说明
+category: 边界
+# 基准：W44 与 case_01 相同；W43 = case_01 的 788513.78 - 被剔除的 -9999 行原值 3918.28
+input:
+  period: 2026-W44
+  files:
+    sales_file: "data/user_cases/case_03_dirty_data/销售明细_脏数据_补回品类列（品类取自case_01）.xlsx"
+    minutes_file: data/user_cases/case_03_dirty_data/周会纪要_2026W44.docx
+steps:
+  - expect:
+      state: PENDING_REVIEW
+      kpis:
+        total.sales: 698896.92
+        total.sales_prev: 784595.50
+        total.qty_prev: 22774
+        total.qty: 20223
+        region.华东.sales_wow: -0.5243
+      anomaly_labels: [华东区, 华南区生鲜食品]
+      report_contains:
+        - 销售额为负 1 行，销量异常 1 行（保留销售额、不计销量）
+        - 10-19 上海南京东路旗舰店 生鲜食品，销售额为 -9999，疑似占位值，整行剔除
+        - 10-19 上海南京东路旗舰店 包装零食，销量为 -50，保留销售额，该行销量不计入
+        - 上海南京东路旗舰店 10-28、10-29；杭州西湖银泰店 10-28、10-29
+        - 剔除重复 0 行
+      qc_all_blocking_passed: true

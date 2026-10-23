@@ -1,0 +1,10 @@
+id: R03
+name: 发起人取消任务，取消后不能再审核
+category: 审核流转
+input:
+  period: 2026-W44
+  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+steps:
+  - cancel: {}
+  - expect: {state: CANCELLED}
+  - illegal: {event: approve}

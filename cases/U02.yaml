@@ -1,0 +1,26 @@
+id: U02
+name: 用户用例：缺上周数据 → 暂停 → 只补传上周数据 → 自动合并后继续
+category: 缺材料
+# 补充文件取自 case_01 的 W43 部分；本周数据为 case_02 自带（与 case_01 的 W44 不同）
+input:
+  period: 2026-W44
+  files:
+    sales_file: data/user_cases/case_02_missing_last_week/销售明细_2026W44_单周.xlsx
+    minutes_file: data/user_cases/case_02_missing_last_week/周会纪要_2026W44.docx
+steps:
+  - expect:
+      state: WAITING_INPUT
+      pause_contains: [2026-W43, 无法计算环比, 可只上传上周数据]
+      state_path: [ADMISSION, WAITING_INPUT]
+  - supplement: {files: {sales_file: "data/user_cases/case_02_missing_last_week/补充_销售明细_2026W43（取自case_01）.xlsx"}}
+  - expect:
+      state: PENDING_REVIEW
+      kpis:
+        total.sales: 702662.64
+        total.sales_prev: 788513.78
+        total.sales_wow: -0.108886
+        region.华东.sales_wow: -0.5356
+        rc.华南.生鲜食品.sales_wow: 0.4800
+      anomaly_labels: [华东区, 华南区生鲜食品]
+      report_contains: [销售明细_2026W44_单周.xlsx, 销售明细_2026W43, "环比为 -53.56%，方向与会上口径一致，但实际幅度明显更大", "环比为 +48.00%，与会上口径一致"]
+      qc_all_blocking_passed: true

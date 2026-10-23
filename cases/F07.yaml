@@ -1,0 +1,9 @@
+id: F07
+name: 模型输出格式错误 → 要求重新输出后继续
+category: 故障
+input:
+  period: 2026-W44
+  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  faults: [{tool: mock, mode: bad_json_once}]
+steps:
+  - expect: {state: PENDING_REVIEW, events: [model_output_invalid]}
