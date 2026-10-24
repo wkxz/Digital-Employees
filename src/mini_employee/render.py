@@ -13,6 +13,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 from .placeholders import fmt_value, resolve
+from .reconcile import extra_notes as reconcile_extra
 from .reconcile import notes as reconcile_notes
 
 Block = tuple[str, Any]
@@ -125,6 +126,9 @@ def build_blocks(content: dict[str, Any], kpis: dict[str, Any], charts: dict[str
                         "checks": checks.get(it.get("id"), [])}
                 texts[sid].extend([item["head"], item["phenomenon"], item["cause"], item["suggestion"], *item["checks"]])
                 blocks.append(("anomaly", item))
+            for n in reconcile_extra(content, kpis, minutes or []):  # 非异常对象的口头说法与数据不一致
+                texts[sid].append(n["text"])
+                blocks.append(("p", n["text"]))
         elif kind == "appendix":
             for t in appendix_lines(kpis, meta):
                 texts[sid].append(t)
@@ -162,6 +166,11 @@ def appendix_lines(kpis: dict[str, Any], meta: dict[str, Any]) -> list[str]:
         lines.append(f"被后上传的更正版替代、未使用的文件：{'、'.join(meta['superseded_files'])}。")
     if meta.get("overridden_rows"):
         lines.append(f"多份数据合并：同一日期、门店、品类在多份文件中重复出现的 {meta['overridden_rows']} 行，以后上传的文件为准。")
+    if meta.get("redacted_columns"):
+        lines.append(f"隐私保护：销售明细中的“{'”“'.join(meta['redacted_columns'])}”含个人信息（手机号 / 身份证号），"
+                     "读取时已剔除或打码，不参与计算、不进入报告。")
+    if meta.get("minutes_masked"):
+        lines.append(f"隐私保护：周会纪要中 {meta['minutes_masked']} 处含手机号 / 身份证号的内容已打码后再交给模型处理。")
     if meta.get("alias_mapping"):
         lines.append("列名识别：" + "，".join(f"“{k}”按“{v}”处理" for k, v in meta["alias_mapping"].items()) + "。")
     return lines

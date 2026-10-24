@@ -187,12 +187,14 @@ def cause_evidence(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
 
 @rule("minutes_vs_data", "纪要说法与数据核对")
 def minutes_vs_data(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
-    """被引用纪要中的涨跌幅说法与交易数据不一致（或实际幅度明显更大）时，报告正文必须有“数据核对”说明。"""
-    from ..reconcile import notes
+    """纪要中的涨跌幅说法与交易数据不一致（或实际幅度明显更大）时，报告正文必须有“数据核对”说明。
+    既核对异常条目引用的纪要，也核对纪要中关于其他区域 / 门店 / 品类的说法（如非异常区域的“暴跌50%”）。"""
+    from ..reconcile import extra_notes, notes
 
     pool = " ".join(ctx.texts.get("anomalies", []))
+    found = notes(ctx.content, ctx.kpis, ctx.minutes) + extra_notes(ctx.content, ctx.kpis, ctx.minutes)
     details = [{"type": "claim_undisclosed", "id": n["id"], "msg": n["text"].replace("数据核对：", "未在报告中说明：")}
-               for n in notes(ctx.content, ctx.kpis, ctx.minutes) if n["status"] != "consistent" and n["text"] not in pool]
+               for n in found if n["status"] != "consistent" and n["text"] not in pool]
     return not details, details, "在异常条目下补充数据核对说明"
 
 

@@ -384,7 +384,8 @@ class Orchestrator:
     def _report_meta(self, task: dict, emp: Employee, version: int) -> dict[str, Any]:
         w = parse_week(task["form"]["period"])
         load = self._out(task["id"], "load")
-        fields = {k: v for k, v in task["form"].items()
+        minutes = self._out(task["id"], "minutes")
+        fields ={k: v for k, v in task["form"].items()
                   if not isinstance(v, list) and not str(v).startswith(("inputs/", "missing:"))}
         skip = set(load.get("superseded_index", []))  # 被更正版替代的销售明细（按上传顺序，同名文件也能区分）
         sources = [n for key, v in task["meta"].get("file_names", {}).items()
@@ -393,6 +394,7 @@ class Orchestrator:
                 "sources": sources,
                 "cleaning": load.get("cleaning", {}), "alias_mapping": load.get("alias_mapping", {}),
                 "overridden_rows": load.get("overridden_rows", 0), "superseded_files": load.get("superseded_files", []),
+                "redacted_columns": load.get("redacted_columns", []), "minutes_masked": minutes.get("masked", 0),
                 "footer": emp.report.get("footer", "")}
 
     def _render(self, task: dict, emp: Employee, gw: ToolGateway, content: dict, version: int, tag: str,

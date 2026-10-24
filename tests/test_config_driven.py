@@ -161,3 +161,22 @@ def test_config_broken_mid_task_pauses_with_reason(edit_employee, orch, sample_f
     assert orch.retry(tid, clear_faults=True) == S.SUSPENDED
     reason = orch.store.get(tid)["pause_reason"]
     assert "配置有误" in reason and "no_such_rule" in reason and "check-config" in reason
+
+
+# ---------------------------------------------------------------- 现场演练：企业数据列名不同，只加别名
+
+def test_live_alias_change_makes_renamed_columns_work(edit_employee, orch):
+    d = ROOT / "data" / "user_cases" / "case_06_column_alias"
+    files = {"sales_file": str(d / "销售明细_别名列.xlsx"), "minutes_file": str(d / "周会纪要_2026W44.docx")}
+    _, state = _run(orch, files)
+    assert state == S.WAITING_INPUT  # 改配置前：列名不认识，暂停
+
+    def add(r):
+        al = r["admission"]["column_aliases"]
+        al["门店"].append("网点名称")
+        al["品类"].append("商品类别")
+        al["销售额"].append("成交金额")
+    edit_employee(add)
+    tid, state = _run(orch, files)
+    assert state == S.PENDING_REVIEW
+    assert "“网点名称”按“门店”处理" in _text(orch, tid)

@@ -49,6 +49,27 @@ def normalize_columns(df: pd.DataFrame, aliases: dict[str, list[str]]) -> tuple[
     return df.rename(columns=mapping), {str(k): v for k, v in mapping.items()}
 
 
+def mask_pii(s: str) -> str:
+    """手机号保留前 3 后 4 位，身份证号保留前 4 后 4 位。"""
+    s = IDCARD_RE.sub(lambda m: m.group(0)[:4] + "*" * 10 + m.group(0)[-4:], s)
+    return PHONE_RE.sub(lambda m: m.group(0)[:3] + "****" + m.group(0)[-4:], s)
+
+
+def redact_columns(df: pd.DataFrame, info: dict[str, Any], required: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    """pii_policy=redact 时使用：含隐私的列，非必需的整列剔除，必需列（如门店名里混入手机号）逐值打码。"""
+    done = []
+    for raw in info.get("pii_columns", []):
+        col = info.get("alias_mapping", {}).get(raw, raw)
+        if col not in df.columns:
+            continue
+        if col in required:
+            df[col] = df[col].astype(str).map(mask_pii)
+        else:
+            df = df.drop(columns=[col])
+        done.append(raw)
+    return df, done
+
+
 def find_pii(df: pd.DataFrame) -> list[str]:
     """检测手机号 / 身份证号。Excel 常把手机号存成数字，因此数值列也转成整数文本检查。"""
     hits = []
@@ -335,6 +356,7 @@ def detect_anomalies(tables: dict[str, list[dict]], threshold: float, top_n: int
 
 _NUM_ITEM = re.compile(r"^\s*(\d+)\s*[.、．)）]\s*(.*)$")
 _CN_SECTION = re.compile(r"^([一二三四五六七八九十]+、)")
+_TAG = re.compile(r"^【([^】]{1,20})】\s*(.*)$")
 
 
 def _minutes_lines(path: Path) -> list[tuple[str, str]]:
@@ -381,6 +403,10 @@ def read_minutes(path: Path) -> list[dict[str, Any]]:
         if m:
             cur_no, line, header = int(m.group(1)), m.group(2).strip(), None
         line = re.sub(r"^[-*•]\s*", "", line)
+        tag = None
+        b = _TAG.match(line)
+        if b and b.group(2).strip():  # “【营运中心】审批通过…”：段首【】是该条的标签，不属于正文
+            tag, line = b.group(1), b.group(2).strip()
         if not line:
             continue
         if line.endswith(("：", ":")) and len(line) <= 40:  # 小标题行，作为后续正文的标题
@@ -393,7 +419,7 @@ def read_minutes(path: Path) -> list[dict[str, Any]]:
             num = cur_no if cur_no is not None else auto_no + 1
         sec = _CN_SECTION.match(section)
         ref = f"{sec.group(1)}{num}" if sec else (f"{section} 第{num}条" if section else f"第{num}条")
-        items.append({"no": len(items) + 1, "ref": ref, "section": section, "header": header, "text": line})
+        items.append({"no": len(items) + 1, "ref": ref, "section": section, "header": header, "tag": tag, "text": line})
     return items
 
 
@@ -404,7 +430,7 @@ def minutes_pii(paras: list[dict]) -> bool:
 def search_minutes(paras: list[dict], keywords: list[str]) -> list[dict]:
     scored = []
     for p in paras:
-        full = f"{p.get('header') or ''} {p['text']}"
+        full = f"{p.get('header') or ''} {p.get('tag') or ''} {p['text']}"
         score = sum(full.count(k) for k in keywords if k)
         if score:
             scored.append((score, p))

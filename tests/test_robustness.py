@@ -238,3 +238,67 @@ def test_filename_may_reference_an_unfilled_optional_field(tmp_path, monkeypatch
     tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files)  # 未填 focus_region
     assert orch.drive(tid) == S.PENDING_REVIEW
     assert orch.store.get(tid)["artifact"]["primary"].endswith("经营周报_2026W44.docx")
+
+
+# ---------------------------------------------------------------- 10. pii_policy=redact 真正脱敏
+
+def _redact_employee(tmp_path, monkeypatch):
+    import yaml
+    import mini_employee.config as C
+    base = tmp_path / "employees"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "employees", base)
+    monkeypatch.setattr(C, "EMPLOYEES_DIR", base)
+    path = base / "weekly_report" / "employee.yaml"
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw["admission"]["pii_policy"] = "redact"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def test_redact_policy_drops_pii_columns_and_masks_minutes(tmp_path, monkeypatch, orch):
+    from mini_employee.fsutil import read_json
+    from mini_employee.runner import _report_text
+    _redact_employee(tmp_path, monkeypatch)
+    minutes = tmp_path / "周会纪要.md"
+    minutes.write_text("# 周会纪要\n\n华东区店长电话 13812345678，客流下降。\n\n华南区生鲜表现良好。\n", encoding="utf-8")
+    d = ROOT_DATA / "user_cases" / "case_07_privacy_leak"
+    tid = orch.create("weekly_report", {"period": "2026-W44"},
+                      {"sales_file": str(d / "销售明细_含隐私信息.xlsx"), "minutes_file": str(minutes)})
+    assert orch.drive(tid) == S.PENDING_REVIEW
+    clean = (orch.task_dir(tid) / "work" / "sales_clean.csv").read_text(encoding="utf-8")
+    assert "会员手机号" not in clean.splitlines()[0] and "13812345678" not in clean, "隐私列不应落盘"
+    saved = json.dumps(read_json(orch.task_dir(tid) / "work" / "minutes.json"), ensure_ascii=False)
+    assert "13812345678" not in saved and "138****5678" in saved, "纪要中的手机号应打码后再交给模型"
+    prompts = json.dumps([e["payload"] for e in orch.store.events(tid, ["tool_called"])], ensure_ascii=False)
+    assert "13812345678" not in prompts
+    text = _report_text(orch, tid)
+    assert "隐私保护：销售明细中的“会员手机号”" in text and "周会纪要中 1 处" in text
+    assert "13812345678" not in text
+
+
+# ---------------------------------------------------------------- 11. 纪要说法核对：识别口语说法，不误判
+
+def test_claims_recognize_colloquial_sales_claims_and_skip_negation():
+    from mini_employee.reconcile import claims
+    got = claims("华北区总监声称：“受修路影响，华北区本周销售额暴跌50%，客流大幅腰斩。”")
+    assert [(c["text"], c["value"]) for c in got] == [("暴跌50%", -50.0)]
+    assert claims("实际仅微跌-3.11%，并非暴跌50%") == []          # 没有“销售”，且“并非”是否定
+    assert claims("客流下降30%，客单价提升5%") == []               # 其他口径不比较
+    within = claims("各区域销售波动均在±2%以内的常规合理区间")
+    assert within and within[0]["kind"] == "within" and within[0]["value"] == 2.0
+    assert claims("各项关键指标（毛利、周转天数）波动幅度在 ±3% 正常合理区间内") == []
+
+
+def test_extra_notes_attribute_claims_to_the_right_object(kpis):
+    from mini_employee.reconcile import extra_notes
+    r = next(x for x in kpis["tables"]["region"])
+    wow = kpis["flat"][f"region.{r['name']}.sales_wow"] * 100
+    far = -50.0 if wow > -40 else 50.0
+    minutes = [{"no": 1, "ref": "第1条", "header": None, "tag": None,
+                "text": f"{r['name']}区本周销售额{'暴跌' if far < 0 else '暴涨'}{abs(far):.0f}%。"},
+               {"no": 2, "ref": "第2条", "header": None, "tag": None,
+                "text": f"{r['name']}区本周销售额环比{'下降' if wow < 0 else '增长'}{abs(wow):.1f}%。"}]
+    notes = extra_notes({"anomalies": []}, kpis, minutes)
+    assert len(notes) == 1 and notes[0]["minutes_no"] == 1, "只有不一致的说法才写核对说明"
+    assert f"{r['name']}区销售额环比为 {wow:+.2f}%" in notes[0]["text"]
+    # 说不清是哪个对象的说法不核对，避免张冠李戴
+    assert extra_notes({"anomalies": []}, kpis, [{**minutes[0], "text": "部分门店销售额暴跌50%。"}]) == []

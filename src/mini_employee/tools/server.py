@@ -76,6 +76,8 @@ def read_sales_data(
     info["has_current_week"] = week.key in info.get("weeks", [])
     info["has_prev_week"] = week.prev.key in info.get("weeks", [])
     if strict:
+        # 走到这里说明准入按 pii_policy=redact 放行：隐私列不落盘、不参与计算
+        df, info["redacted_columns"] = D.redact_columns(df, info, required_columns)
         out = _inside(task_dir, "work/sales_clean.csv")
         out.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(out, index=False)
@@ -125,8 +127,14 @@ def read_minutes(task_dir: str, file_path: Annotated[str, Field(description="周
         raise _fail(e) from e
     if not paras:
         raise ToolError(encode(MISSING_INPUT, "周会纪要内容为空，请上传包含会议内容的纪要"))
+    has_pii = D.minutes_pii(paras)
+    masked = 0
+    for p in paras:  # 准入按 pii_policy=reject 时含隐私会直接拒绝；redact 时打码后再交给模型
+        for k in ("text", "header", "tag"):
+            if p.get(k) and (new := D.mask_pii(p[k])) != p[k]:
+                p[k], masked = new, masked + 1
     write_json(_inside(task_dir, "work/minutes.json"), paras)
-    return {"count": len(paras), "paragraphs": paras, "has_pii": D.minutes_pii(paras)}
+    return {"count": len(paras), "paragraphs": paras, "has_pii": has_pii, "masked": masked}
 
 
 @mcp.tool

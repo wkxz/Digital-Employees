@@ -134,7 +134,8 @@ def action_items(minutes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for m in minutes:
         where = f"{m.get('section', '')} {m.get('header') or ''}"
         if ACTION_SECTION.search(where) or m["text"].startswith(("下周计划", "行动项", "决议")):
-            out.append({"no": m["no"], "ref": m.get("ref"), "text": m["text"].rstrip("；;。")})
+            owner = m.get("tag") or ""  # 【营运中心】等标签是行动项的负责部门：“营运中心审批通过……”
+            out.append({"no": m["no"], "ref": m.get("ref"), "text": owner + m["text"].rstrip("；;。")})
     return out
 
 
