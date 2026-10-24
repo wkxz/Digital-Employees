@@ -4,8 +4,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 
 def sha256_file(path: Path) -> str:
@@ -47,3 +48,21 @@ def idempotent_write(path: Path, input_hash: str, writer: Callable[[Path], None]
     digest = sha256_file(path)
     write_json(meta, {"input_hash": input_hash, "sha256": digest})
     return digest, False
+
+
+@contextmanager
+def exclusive_lock(path: Path) -> Iterator[bool]:
+    """进程间互斥锁（Windows 用 msvcrt，Linux / macOS 用 fcntl）。拿到锁返回 True，已被其他进程持有返回 False。"""
+    with open(path, "a+") as f:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        yield True  # 文件关闭时锁自动释放

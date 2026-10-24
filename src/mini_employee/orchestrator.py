@@ -181,7 +181,11 @@ class Orchestrator:
     def resume_all(self) -> list[tuple[str, S]]:
         out = []
         for t in self.store.list():
-            if t["state"] in AUTO:
+            if t["state"] == S.DELIVERED and not (self.task_dir(t["id"]) / "deliverable" / "manifest.json").exists():
+                self.store.event(t["id"], "task_resumed", None, {"state": t["state"], "reason": "交付包不完整，重新生成"})
+                self._deliver(t["id"])  # 审核通过后、交付包写完前被中断
+                out.append((t["id"], S.DELIVERED))
+            elif t["state"] in AUTO:
                 self.store.event(t["id"], "task_resumed", None, {"state": t["state"]})
                 out.append((t["id"], self.drive(t["id"], resumed=True)))
         return out
@@ -374,9 +378,11 @@ class Orchestrator:
         load = self._out(task["id"], "load")
         fields = {k: v for k, v in task["form"].items()
                   if not isinstance(v, list) and not str(v).startswith(("inputs/", "missing:"))}
+        skip = set(load.get("superseded_index", []))  # 被更正版替代的销售明细（按上传顺序，同名文件也能区分）
+        sources = [n for key, v in task["meta"].get("file_names", {}).items()
+                   for i, n in enumerate(self._as_list(v)) if not (key == "sales_file" and i in skip)]
         return {**fields, "period": w.key, "period_compact": w.compact, "period_label": w.label, "version": version,
-                "sources": [n for v in task["meta"].get("file_names", {}).values() for n in self._as_list(v)
-                            if n not in load.get("superseded_files", [])],
+                "sources": sources,
                 "cleaning": load.get("cleaning", {}), "alias_mapping": load.get("alias_mapping", {}),
                 "overridden_rows": load.get("overridden_rows", 0), "superseded_files": load.get("superseded_files", []),
                 "footer": emp.report.get("footer", "")}
@@ -492,7 +498,8 @@ class Orchestrator:
         tid, version = task["id"], task["version"]
         emp = load_employee(task["employee"])
         n = task["qc_rounds"] + 1
-        key = f"fix@v{version}r{n}"
+        # 缓存键绑定“被修正的那一版产物”：断点恢复时复用；重试或人工修改后产物变了，就重新修正，不会拿旧结果覆盖
+        key = f"fix@{task['artifact']['tag']}r{n}"
         ih = self._inputs_hash(task)
         if self._done(tid, key, ih):
             out = self._out(tid, key)
@@ -524,8 +531,10 @@ class Orchestrator:
                     self._pause(tid, "step_failed", f"自动修正第 {n} 轮失败：{e}。可人工修改后重新质检，或重试。")
                     return
                 actions.append("模型按质检意见改写：" + "、".join(f["name"] for f in remaining))
+            seq = sum(1 for e in self.store.events(tid, ["step_completed"])
+                      if e["step_id"] == "fix" and e["payload"].get("version") == version) + 1
             try:
-                res = self._render(task, emp, gw, content, version, f"v{version}f{n}", "fix")
+                res = self._render(task, emp, gw, content, version, f"v{version}f{seq}", "fix")
             except ToolFailure as e:
                 self._pause(tid, "step_failed", f"自动修正后生成文件失败：{e.message}")
                 return
@@ -534,7 +543,7 @@ class Orchestrator:
             self.store.event(tid, "step_completed", "fix", {"key": key, "version": version, "sha256": digest,
                                                             "inputs_hash": ih, "actions": actions,
                                                             "ms": int((time.monotonic() - t0) * 1000)})
-        art = self._artifact(task, emp, out["render"], version, tag=f"v{version}f{n}")
+        art = self._artifact(task, emp, out["render"], version, tag=Path(out["render"]["texts_path"]).parent.name)
         art["fix_actions"] = out["actions"]
         art["prev_content_path"] = task["artifact"].get("prev_content_path")
         self.store.update(tid, artifact=art, qc_rounds=n)
@@ -560,19 +569,22 @@ class Orchestrator:
         kpis = read_json(self.task_dir(tid) / "work" / "kpis.json")
         todos = parse_feedback(comments, emp.raw.get("feedback", {}), kpis)
         new_v = task["version"] + 1
+        # 先落盘审核意见再流转：若在两步之间中断，返工时也一定读得到意见，不会原样复用上一版
+        write_json(self.task_dir(tid) / "steps" / f"feedback@v{new_v}.json",
+                   {"comments": comments, "todos": todos, "prev_content_path": task["artifact"]["content_path"]})
         self.store.transition(tid, "request_changes", actor, {"comments": comments, "max_rework_rounds": max_rw,
                                                               "reason": comments},
                               version=new_v, rework_rounds=task["rework_rounds"] + 1, qc_rounds=0)
-        write_json(self.task_dir(tid) / "steps" / f"feedback@v{new_v}.json",
-                   {"comments": comments, "todos": todos, "prev_content_path": task["artifact"]["content_path"]})
         self.store.event(tid, "feedback_parsed", None, {"version": new_v, "todos": todos})
         return self.drive(tid) if run else S.REWORK
 
     def _deliver(self, tid: str) -> None:
+        """生成交付包。可重复执行：manifest.json 最后写入，没有它就说明交付包不完整，断点恢复时会重新生成。"""
         task = self.store.get(tid)
         d = self.task_dir(tid)
         out = d / "deliverable"
         out.mkdir(exist_ok=True)
+        (out / "manifest.json").unlink(missing_ok=True)
         files = []
         for fmt, f in task["artifact"]["files"].items():
             src = d / f["path"]

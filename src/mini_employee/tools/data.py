@@ -93,12 +93,16 @@ def load_sales_many(paths: list[Path], aliases: dict[str, list[str]], required: 
         dates = set(pd.to_datetime(df["日期"], errors="coerce").dropna().dt.date) if "日期" in df.columns else set()
         loaded.append((p, df, info, dates))
     # 更正版重传：后上传的文件列齐全时，丢弃先前缺列的文件；后上传的文件覆盖了先前文件的全部日期时，先前文件整体作废
-    superseded = []
+    # 按上传顺序（下标）判断，不按文件名：更正版常与原文件同名，按名字会把更正版也一起作废
+    superseded_idx = []
     for i, (p, _, info, dates) in enumerate(loaded):
         later = [x for x in loaded[i + 1:] if not x[2]["missing_columns"]]
         if later and (info["missing_columns"] or any(dates and dates <= x[3] for x in later)):
-            superseded.append(p.name.split("_", 1)[-1])
-    kept = [x for x in loaded if x[0].name.split("_", 1)[-1] not in superseded] or loaded[-1:]
+            superseded_idx.append(i)
+    kept_idx = [i for i in range(len(loaded)) if i not in superseded_idx] or [len(loaded) - 1]
+    superseded_idx = [i for i in range(len(loaded)) if i not in kept_idx]
+    superseded = [loaded[i][0].name.split("_", 1)[-1] for i in superseded_idx]
+    kept = [loaded[i] for i in kept_idx]
     paths = [x[0] for x in kept]
     frames, infos = [x[1] for x in kept], [x[2] for x in kept]
     missing = sorted({c for inf in infos for c in inf["missing_columns"]})
@@ -117,6 +121,7 @@ def load_sales_many(paths: list[Path], aliases: dict[str, list[str]], required: 
         "files": [{"name": p.name.split("_", 1)[-1], "rows": inf["rows"], "date_range": inf.get("date_range")}
                   for p, inf in zip(paths, infos)],
         "overridden_rows": overridden, "superseded_files": superseded,
+        "superseded_index": superseded_idx,
     }
     if not missing:
         dates = pd.to_datetime(df["日期"], errors="coerce").dropna()
@@ -209,6 +214,11 @@ def compute_kpis(df: pd.DataFrame, week: Week, threshold: float, top_n: int, min
     if lacking:
         raise DataError("MISSING_INPUT", f"本周数据不完整，缺少 {', '.join(lacking)} 的销售记录，请补充后继续",
                         {"missing_dates": lacking})
+    have_prev = {d.date() for d in prev["日期"].unique()}
+    lacking_prev = [d.isoformat() for d in pw.days() if d not in have_prev]
+    if lacking_prev:  # 上周缺天会让环比虚高、误报异常
+        raise DataError("MISSING_INPUT", f"上一周（{pw.key}）数据不完整，缺少 {', '.join(lacking_prev)} 的销售记录，"
+                                         "环比会失真，请补充后继续", {"missing_dates": lacking_prev})
 
     flat: dict[str, Any] = {}
     total = _with_wow(_agg(cur), _agg(prev))

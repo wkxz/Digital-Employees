@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from ..fsutil import read_json, write_json
-from ..placeholders import fmt_value
+from ..payloads import store_core
+from ..placeholders import PH_RE, fmt_value
 from ..tools.data import IDCARD_RE, PHONE_RE
 from .rules import RULES, QCContext, Result
 
@@ -43,10 +44,12 @@ def program_fix(content: dict[str, Any], failures: list[dict[str, Any]], flat: d
         for d in f["details"]:
             t = d.get("type") if isinstance(d, dict) else None
             if t == "hardcoded":
-                key = _match_number(d["text"], flat)
+                text = _item_text(c, d)
+                clause = _clause_of(text, d["text"]) if text is not None else None
+                key = _match_number(d["text"], flat, clause) if clause is not None else None
                 if key:
-                    _replace_everywhere(c, d["text"], "{{" + key + "}}")
-                    actions.append(f"数字“{d['text']}”与程序计算值一致，替换为占位符 {{{{{key}}}}}")
+                    _set_item_text(c, d, _replace_in_clause(text, d["text"], "{{" + key + "}}"))
+                    actions.append(f"数字“{d['text']}”与该句所述对象的程序计算值一致，替换为占位符 {{{{{key}}}}}")
                     continue
                 left.append(d)
             elif t in ("pii", "word"):
@@ -72,15 +75,76 @@ def _mask(s: str) -> str:
     return "*" * len(s)
 
 
-def _match_number(text: str, flat: dict[str, Any]) -> str | None:
-    norm = re.sub(r"\s", "", text).replace("−", "-")
-    for k, v in flat.items():
-        if re.sub(r"\s", "", fmt_value(k, v)) in (norm, "+" + norm):
-            return k
-    for k, v in flat.items():  # 跟在“增长/下降”后的绝对值写法
-        if re.sub(r"\s", "", fmt_value(k, v, absolute=True)) == norm:
-            return k + "|abs"
+_CLAUSE_SPLIT = re.compile(r"([，,；;。！？\n])")
+_TOTAL_WORDS = ("整体", "总", "合计", "全部", "大盘", "全公司")
+
+
+def _item_text(c: dict[str, Any], d: dict[str, Any]) -> str | None:
+    try:
+        item = c[d["section"]][d["index"]]
+        return item.get(d.get("field") or "phenomenon") if isinstance(item, dict) else item
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _set_item_text(c: dict[str, Any], d: dict[str, Any], text: str) -> None:
+    item = c[d["section"]][d["index"]]
+    if isinstance(item, dict):
+        item[d.get("field") or "phenomenon"] = text
+    else:
+        c[d["section"]][d["index"]] = text
+
+
+def _clause_of(text: str, number: str) -> str | None:
+    """数字所在的分句（不含占位符本身）。"""
+    for clause in _CLAUSE_SPLIT.split(text):
+        if number in PH_RE.sub("", clause):
+            return clause
     return None
+
+
+def _replace_in_clause(text: str, number: str, new: str) -> str:
+    """只替换数字所在分句中的这一处，不影响其他句子里碰巧相同的数字（如原样引用的纪要数字）。"""
+    parts = _CLAUSE_SPLIT.split(text)
+    for i, clause in enumerate(parts):
+        if number in PH_RE.sub("", clause):
+            parts[i] = clause.replace(number, new, 1)
+            break
+    return "".join(parts)
+
+
+def _entities(key: str) -> list[str] | None:
+    """占位符键对应的对象名：total → []；region/store/category → [名称]；rc → [区域, 品类]；其他不参与匹配。"""
+    parts = key.split(".")
+    if parts[0] == "total":
+        return []
+    if parts[0] in ("region", "store", "category") and len(parts) >= 3:
+        return [".".join(parts[1:-1])]
+    if parts[0] == "rc" and len(parts) == 4:
+        return parts[1:3]
+    return None
+
+
+def _mentioned(name: str, clause: str) -> bool:
+    return name in clause or store_core(name) in clause
+
+
+def _match_number(text: str, flat: dict[str, Any], clause: str) -> str | None:
+    """只在该句提到的对象（区域 / 门店 / 品类）的指标中找数值相同的键；句中没提到具体对象时只看整体指标。
+    唯一匹配才替换，匹配不到或有歧义的交给模型改——避免把写错的数字换成碰巧数值相同的其他指标。"""
+    norm = re.sub(r"\s", "", text).replace("−", "-")
+    named = {k: e for k, e in ((k, _entities(k)) for k in flat) if e}
+    cands = [k for k, e in named.items() if all(_mentioned(n, clause) for n in e)]
+    if not cands or any(w in clause for w in _TOTAL_WORDS):
+        cands += [k for k in flat if _entities(k) == []]
+    hits = set()
+    for k in cands:
+        v = flat[k]
+        if re.sub(r"\s", "", fmt_value(k, v)) in (norm, "+" + norm):
+            hits.add(k)
+        elif isinstance(v, (int, float)) and re.sub(r"\s", "", fmt_value(k, v, absolute=True)) == norm:
+            hits.add(k + "|abs")
+    return hits.pop() if len(hits) == 1 else None
 
 
 def _replace_everywhere(obj: Any, old: str, new: str) -> Any:

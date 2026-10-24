@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import load_employee, runs_dir
+from .fsutil import exclusive_lock
 from .orchestrator import Orchestrator
 from .states import INITIATOR, LABELS, REVIEWER, S, table_markdown
 from .store import IllegalTransition
@@ -97,11 +98,8 @@ def main(argv: list[str] | None = None) -> int:
                 o.drive(tid)
             _show(o, tid)
         elif a.cmd == "run":
-            import fcntl
-            with open(o.task_dir(a.task) / ".lock", "w") as lock:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
+            with exclusive_lock(o.task_dir(a.task) / ".lock") as got:
+                if not got:
                     print("该任务正在由另一个进程执行")
                     return 3
                 o.drive(a.task)
