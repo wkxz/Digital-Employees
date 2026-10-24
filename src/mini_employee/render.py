@@ -268,4 +268,212 @@ def write_md(blocks: list[Block], path: Path) -> None:
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
-WRITERS = {"docx": write_docx, "md": write_md}
+_HTML_CSS = """
+body{font-family:"Microsoft YaHei","PingFang SC","Source Han Sans CN",sans-serif;max-width:860px;margin:32px auto;
+padding:0 20px;color:#222;line-height:1.75;font-size:15px}
+h1{color:#1f3a5f;font-size:26px;margin-bottom:4px}h2{color:#1f3a5f;font-size:19px;margin-top:28px;
+border-bottom:1px solid #dde3ea;padding-bottom:4px}.meta{color:#666;font-size:13px}.cap{font-weight:bold;color:#444;
+margin:14px 0 4px;font-size:13px}table{border-collapse:collapse;width:100%;font-size:13px;margin-bottom:8px}
+th,td{border:1px solid #d5dce4;padding:4px 8px}th{background:#eef3f8;text-align:left}td.n{text-align:right}
+img{max-width:100%;margin:8px 0}.anomaly{margin:10px 0 14px}.anomaly p{margin:2px 0 2px 1.2em}
+.anomaly .head{margin-left:0;font-weight:bold}.check{color:#5a3a00}.check b{color:#b05a00}
+.footer{color:#888;font-size:12px;border-top:1px solid #eee;margin-top:28px;padding-top:8px}
+"""
+
+
+def write_html(blocks: list[Block], path: Path) -> None:
+    """单文件 HTML：图表以 base64 内嵌，发邮件或用浏览器打开即可，不依赖其他文件。"""
+    import base64
+    from html import escape as e
+
+    title = next((v for k, v in blocks if k == "title"), "经营周报")
+    out = ["<!doctype html>", '<html lang="zh-CN"><head><meta charset="utf-8">',
+           f"<title>{e(title)}</title><style>{_HTML_CSS}</style></head><body>"]
+    in_list = False
+    for kind, val in blocks:
+        if in_list and kind != "bullet":
+            out.append("</ul>")
+            in_list = False
+        if kind == "title":
+            out.append(f"<h1>{e(val)}</h1>")
+        elif kind == "meta":
+            out.append(f'<p class="meta">{e(val)}</p>')
+        elif kind == "h2":
+            out.append(f"<h2>{e(val)}</h2>")
+        elif kind == "p":
+            out.append(f"<p>{e(val)}</p>")
+        elif kind == "bullet":
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            out.append(f"<li>{e(val)}</li>")
+        elif kind == "anomaly":
+            out.append(f'<div class="anomaly"><p class="head">{e(val["head"])}</p>')
+            out += [f"<p><b>{lab}：</b>{e(val[k])}</p>" for lab, k in
+                    (("现象", "phenomenon"), ("原因", "cause"), ("建议", "suggestion")) if val[k]]
+            out += [f'<p class="check"><b>{e(n.partition("：")[0])}：</b>{e(n.partition("：")[2])}</p>'
+                    for n in val.get("checks", [])]
+            out.append("</div>")
+        elif kind == "table":
+            out.append(f'<p class="cap">{e(val["title"])}</p><table><thead><tr>'
+                       + "".join(f"<th>{e(c)}</th>" for c in val["columns"]) + "</tr></thead><tbody>")
+            out += ["<tr>" + "".join(f'<td{" class=n" if i else ""}>{e(str(c))}</td>' for i, c in enumerate(row))
+                    + "</tr>" for row in val["rows"]]
+            out.append("</tbody></table>")
+        elif kind == "image":
+            data = base64.b64encode(Path(val["path"]).read_bytes()).decode()
+            out.append(f'<img alt="{e(val["caption"])}" src="data:image/png;base64,{data}">')
+        elif kind == "footer" and val:
+            out.append(f'<p class="footer">{e(val)}</p>')
+    if in_list:
+        out.append("</ul>")
+    out.append("</body></html>")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+class _PdfLayout:
+    """用 matplotlib 排版 A4 PDF：内置思源黑体，中文不依赖系统字体，也不需要 Word / LibreOffice。"""
+    W, H, LEFT, RIGHT, TOP, BOTTOM = 8.27, 11.69, 0.85, 0.85, 0.8, 0.8  # 英寸
+
+    def __init__(self, pdf: Any):
+        import matplotlib.pyplot as plt
+
+        from .tools import charts  # noqa: F401  注册中文字体
+
+        self.plt, self.pdf, self.fig, self.page = plt, pdf, None, 0
+        self.cw = self.W - self.LEFT - self.RIGHT
+        self.new_page()
+
+    def new_page(self) -> None:
+        if self.fig is not None:
+            self.pdf.savefig(self.fig)
+            self.plt.close(self.fig)
+        self.fig = self.plt.figure(figsize=(self.W, self.H))
+        self.page += 1
+        self.fig.text(0.5, 0.4 / self.H, f"第 {self.page} 页", ha="center", fontsize=8, color="#999")
+        self.y = self.H - self.TOP
+
+    def close(self) -> None:
+        self.pdf.savefig(self.fig)
+        self.plt.close(self.fig)
+
+    def need(self, h: float) -> None:
+        if self.y - h < self.BOTTOM:
+            self.new_page()
+
+    @staticmethod
+    def width(s: str, size: float) -> float:
+        import unicodedata
+        return sum(size * (1.0 if unicodedata.east_asian_width(ch) in "WF" else 0.56) for ch in s) / 72
+
+    def wrap(self, s: str, size: float, max_w: float) -> list[str]:
+        lines, cur = [], ""
+        for ch in s:
+            if ch == "\n" or (cur and self.width(cur + ch, size) > max_w):
+                lines.append(cur)
+                cur = "" if ch == "\n" else ch
+            else:
+                cur += ch
+        return lines + [cur] if cur or not lines else lines
+
+    def text(self, s: str, size: float = 10.5, color: str = "#222222", indent: float = 0.0, prefix: str = "",
+             before: float = 0.0, after: float = 4.0) -> None:
+        self.y -= before / 72
+        pw = self.width(prefix, size)
+        lh = size * 1.6 / 72
+        for i, ln in enumerate(self.wrap(s, size, self.cw - indent - pw)):
+            self.need(lh)
+            if i == 0 and prefix:
+                self.fig.text((self.LEFT + indent) / self.W, (self.y - size / 72) / self.H, prefix, fontsize=size,
+                              color=color)
+            self.fig.text((self.LEFT + indent + pw) / self.W, (self.y - size / 72) / self.H, ln, fontsize=size,
+                          color=color)
+            self.y -= lh
+        self.y -= after / 72
+
+    def table(self, title: str, columns: list[str], rows: list[list[Any]], size: float = 8.5) -> None:
+        from matplotlib.patches import Rectangle
+
+        self.text(title, 9.5, "#444444", before=4, after=2)
+        cells = [columns] + [[str(c) for c in r] for r in rows]
+        natural = [max(self.width(str(r[i]), size) for r in cells) + 0.16 for i in range(len(columns))]
+        scale = min(1.0, self.cw / sum(natural))
+        widths = [w * scale for w in natural] if scale < 1 else [w + (self.cw - sum(natural)) / len(natural)
+                                                                  for w in natural]
+        rh = size * 1.9 / 72
+
+        def row(vals: list[str], header: bool) -> None:
+            self.need(rh)
+            x = self.LEFT
+            if header:
+                self.fig.patches.append(Rectangle((self.LEFT / self.W, (self.y - rh) / self.H), self.cw / self.W,
+                                                  rh / self.H, transform=self.fig.transFigure, color="#eef3f8"))
+            for i, (v, w) in enumerate(zip(vals, widths)):
+                right = i > 0  # 数字列右对齐，表头与数据对齐方式一致
+                self.fig.text((x + (w - 0.08 if right else 0.08)) / self.W, (self.y - rh * 0.68) / self.H, v,
+                              fontsize=size, ha="right" if right else "left", color="#222222")
+                x += w
+            self.fig.add_artist(self.plt.Line2D([self.LEFT / self.W, (self.LEFT + self.cw) / self.W],
+                                                [(self.y - rh) / self.H] * 2, color="#d5dce4", linewidth=0.6,
+                                                transform=self.fig.transFigure))
+            self.y -= rh
+
+        self.need(rh * 2)  # 表头至少带一行数据，不单独留在页尾
+        page = self.page
+        row(columns, True)
+        for r in cells[1:]:
+            if self.y - rh < self.BOTTOM:
+                self.new_page()
+            if self.page != page:  # 表格跨页时在新页重复表头
+                page = self.page
+                row(columns, True)
+            row(r, False)
+        self.y -= 6 / 72
+
+    def image(self, path: str) -> None:
+        import matplotlib.image as mpimg
+
+        img = mpimg.imread(path)
+        h = self.cw * img.shape[0] / img.shape[1]
+        self.need(h)
+        ax = self.fig.add_axes([self.LEFT / self.W, (self.y - h) / self.H, self.cw / self.W, h / self.H])
+        ax.imshow(img)
+        ax.axis("off")
+        self.y -= h + 6 / 72
+
+
+def write_pdf(blocks: list[Block], path: Path) -> None:
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    with PdfPages(path, metadata={"CreationDate": None}) as pdf:  # 去掉生成时间，同样内容生成同样的文件
+        lay = _PdfLayout(pdf)
+        for kind, val in blocks:
+            if kind == "title":
+                lay.text(val, 18, "#1F3A5F", after=4)
+            elif kind == "meta":
+                lay.text(val, 8.5, "#666666", after=8)
+            elif kind == "h2":
+                lay.need(0.6)  # 避免标题落在页尾
+                lay.text(val, 13, "#1F3A5F", before=8, after=4)
+            elif kind == "p":
+                lay.text(val)
+            elif kind == "bullet":
+                lay.text(val, prefix="• ", indent=0.1, after=2)
+            elif kind == "anomaly":
+                lay.text(val["head"], 10.5, "#1F3A5F", before=4, after=2)
+                for label, key in (("现象", "phenomenon"), ("原因", "cause"), ("建议", "suggestion")):
+                    if val[key]:
+                        lay.text(val[key], prefix=f"{label}：", indent=0.25, after=2)
+                for note in val.get("checks", []):
+                    label, _, body = note.partition("：")
+                    lay.text(body, color="#5A3A00", prefix=f"{label}：", indent=0.25, after=2)
+            elif kind == "table":
+                lay.table(val["title"], val["columns"], val["rows"])
+            elif kind == "image":
+                lay.image(val["path"])
+            elif kind == "footer" and val:
+                lay.text(val, 8, "#888888", before=10)
+        lay.close()
+
+
+WRITERS = {"docx": write_docx, "md": write_md, "html": write_html, "pdf": write_pdf}

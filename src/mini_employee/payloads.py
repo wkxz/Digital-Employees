@@ -14,16 +14,45 @@ ANOMALY_ITEM = {
                    "brief": {"type": "string", "description": "摘要用的一句话原因，不含数字"},
                    "evidence": {"type": "array", "items": {"type": "integer"}}, "suggestion": {"type": "string"}},
 }
-DRAFT_SECTIONS = ["summary", "overall", "regions", "categories", "next_week"]
+DRAFT_SECTIONS = ["summary", "overall", "regions", "categories", "next_week"]  # 默认章节；实际以员工配置为准
+TEXT_KINDS = ("paragraphs", "bullets")
 
-OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
-    "analysis": {"type": "object", "required": ["anomalies"],
-                 "properties": {"anomalies": {"type": "array", "items": ANOMALY_ITEM}}},
-    "draft": {"type": "object", "required": DRAFT_SECTIONS, "properties": {k: _STR_LIST for k in DRAFT_SECTIONS}},
-    "fix": {"type": "object", "required": DRAFT_SECTIONS + ["anomalies"],
-            "properties": {**{k: _STR_LIST for k in DRAFT_SECTIONS},
-                           "anomalies": {"type": "array", "items": ANOMALY_ITEM}}},
-}
+
+def draft_sections(report_cfg: dict[str, Any] | None) -> list[str]:
+    """由模型撰写文字的章节 = 员工配置 report.sections 中 kind 为 paragraphs / bullets 的章节。
+    新增章节只需在配置里加一行，撰写与修正步骤的输出 Schema 随之变化。"""
+    if not report_cfg:
+        return list(DRAFT_SECTIONS)
+    return [s["id"] for s in report_cfg["sections"] if s.get("kind", "paragraphs") in TEXT_KINDS]
+
+
+def output_schema(purpose: str, report_cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    secs = draft_sections(report_cfg)
+    if purpose == "analysis":
+        return {"type": "object", "required": ["anomalies"],
+                "properties": {"anomalies": {"type": "array", "items": ANOMALY_ITEM}}}
+    if purpose == "draft":
+        return {"type": "object", "required": secs, "properties": {k: _STR_LIST for k in secs}}
+    if purpose == "fix":
+        return {"type": "object", "required": secs + ["anomalies"],
+                "properties": {**{k: _STR_LIST for k in secs}, "anomalies": {"type": "array", "items": ANOMALY_ITEM}}}
+    raise KeyError(purpose)
+
+
+OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {k: output_schema(k) for k in ("analysis", "draft", "fix")}  # 默认章节下的 Schema
+
+
+def form_fields(form: dict[str, Any], form_cfg: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """发起人在表单中填写的其他字段（文件与统计周期除外），连同配置里的写作要求一起交给模型。
+    表单加字段时在配置里写上 guide（怎么用）和 section（体现在哪一章），模型照做，质检按 section 校验。"""
+    out = []
+    for f in form_cfg:
+        v = form.get(f["key"])
+        if f["type"] in ("file", "iso_week") or v in (None, "", []):
+            continue
+        out.append({k: x for k, x in {"key": f["key"], "label": f["label"], "value": v, "guide": f.get("guide"),
+                                      "section": f.get("section")}.items() if x is not None})
+    return out
 
 
 def _direction(v: float | None) -> str:

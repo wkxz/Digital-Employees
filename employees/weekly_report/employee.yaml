@@ -15,6 +15,13 @@ form:
   - {key: sales_file, label: 销售明细, type: file, ext: [xlsx, csv], required: true, multiple: true}  # 可分多份上传，补充材料时追加
   - {key: minutes_file, label: 周会纪要, type: file, ext: [docx, md], required: true}
   - {key: focus_region, label: 重点关注区域, type: enum, options: [华东, 华南, 华北, 西南], required: false}
+  # 现场变更示例（纯配置加字段）：type 可选 string / enum；字段会出现在发起页，并连同 guide 一起交给模型。
+  #   写了 section：模型须在该章节体现，程序自动加一条质检核对该章节确实提到了填写的值。
+  #   只想显示在报告上：在下面 report.title / report.footer 里写 {字段key}。
+  #   新字段建议 required: false，否则未带该字段的现有自测用例会被拒绝。
+  # - {key: focus_category, label: 重点关注品类, type: enum, options: [生鲜, 饮料, 零食, 日化, 粮油], required: false,
+  #    guide: "在“品类表现”中单独写一句该品类的销售额、占比和环比", section: categories}
+  # - {key: recipient, label: 报告接收人, type: string, required: false}
 
 # ---------------------------------------------------------------- 准入校验
 admission:
@@ -141,8 +148,11 @@ feedback:
 report:
   title: "经营周报 · {period_label}"
   filename: "经营周报_{period_compact}"
-  output_formats: [docx]          # 可加 md
-  footer: "本报告由迷你数字员工生成，数字由程序计算，经人工审核后交付。"
+  output_formats: [docx]          # 可选 docx / md / html / pdf，第一个是审核用的主文件（建议保持 docx 在首位）
+  footer: "本报告由迷你数字员工生成，数字由程序计算，经人工审核后交付。"   # 可引用表单字段，如 "报送：{recipient}。"
+  # 章节：kind 为 paragraphs / bullets 的由模型撰写，guide 是写给模型的本章要求。
+  # 现场变更示例（纯配置加章节）：在 appendix 前插入
+  #   - {id: risks, title: 七、风险提示, kind: bullets, guide: "列出下周可能影响销售的风险，每条一句"}
   sections:
     - {id: summary, title: 一、本周摘要, kind: bullets}
     - {id: overall, title: 二、整体经营, kind: paragraphs, tables: [kpi_overall], charts: [daily_trend]}

@@ -16,8 +16,8 @@ from .config import Employee, load_employee, runs_dir
 from .fsutil import read_json, sha256_file, sha256_json, write_json
 from .llm import LLMUnavailable, build_llm
 from .llm.agent import MissingInput, StepLimitExceeded, run_agent_step
-from .payloads import (DRAFT_SECTIONS, OUTPUT_SCHEMAS, PLACEHOLDER_HELP, action_items, anomaly_inputs, overview,
-                       parse_feedback, placeholder_table)
+from .payloads import (PLACEHOLDER_HELP, action_items, anomaly_inputs, draft_sections, form_fields, output_schema,
+                       overview, parse_feedback, placeholder_table)
 from .periods import parse_week, today
 from .qc.engine import append_record, blocking_failures, now, program_fix, run_rules
 from .qc.rules import QCContext
@@ -408,12 +408,14 @@ class Orchestrator:
         if step["type"] == "render":
             draft = self._out(tid, f"draft@v{version}")
             analysis = self._out(tid, f"analysis@v{version}")
-            content = {**{k: draft.get(k, []) for k in DRAFT_SECTIONS}, "anomalies": analysis.get("anomalies", [])}
+            content = {**{k: draft.get(k, []) for k in draft_sections(emp.report)},
+                       "anomalies": analysis.get("anomalies", [])}
             return self._render(task, emp, gw, content, version, f"v{version}", step["id"])
         # agent
         kpis = read_json(self.task_dir(tid) / "work" / "kpis.json")
         purpose = step["purpose"]
         todos = fb["todos"] if fb else None
+        fields = form_fields(task["form"], emp.form)
         if purpose == "analysis":
             prev = self._out(tid, f"analysis@v{version - 1}") if fb else None
             minutes = read_json(self.task_dir(tid) / "work" / "minutes.json")
@@ -421,6 +423,7 @@ class Orchestrator:
                        "anomalies": anomaly_inputs(kpis), "minutes_count": len(minutes),
                        # 纪要通常很短，直接给全文，避免模型反复检索；过长时只给条数，由模型用 search_minutes 检索
                        "minutes": minutes if sum(len(m["text"]) for m in minutes) <= 8000 else None,
+                       "form_fields": fields,
                        "feedback": todos, "feedback_raw": fb["comments"] if fb else None, "previous": prev}
         else:
             analysis = self._out(tid, f"analysis@v{version}")
@@ -429,8 +432,9 @@ class Orchestrator:
             payload = {
                 "period": kpis["period"], "period_label": kpis["period_label"],
                 "focus_region": task["form"].get("focus_region"),
-                "sections": [{"id": s["id"], "title": s["title"]} for s in emp.report["sections"]
-                             if s["id"] in DRAFT_SECTIONS],
+                "form_fields": fields,  # 表单里的全部其他字段及其写作要求（guide / section），加字段不用改代码
+                "sections": [{k: v for k, v in {"id": s["id"], "title": s["title"], "guide": s.get("guide")}.items() if v}
+                             for s in emp.report["sections"] if s["id"] in draft_sections(emp.report)],
                 "overview": overview(kpis),
                 "anomalies": [{**it, "label": labels.get(it["id"], {}).get("label", ""),
                                "direction": labels.get(it["id"], {}).get("direction", "")}
@@ -443,7 +447,7 @@ class Orchestrator:
         lim = emp.limits
         return run_agent_step(llm, gw, self._emit(tid), step_id=step["id"], purpose=purpose,
                               system=emp.skill(*step.get("skill_sections", [])), payload=payload,
-                              tools=step.get("tools", []), output_schema=OUTPUT_SCHEMAS[purpose],
+                              tools=step.get("tools", []), output_schema=output_schema(purpose, emp.report),
                               max_turns=lim["max_model_turns_per_step"], max_seconds=lim["max_step_seconds"])
 
     # ---------------------------------------------------------------- QC
@@ -456,6 +460,10 @@ class Orchestrator:
         fb = self._feedback(task["id"], task["version"])
         if fb and fb["todos"]:
             specs.append({"rule": "feedback_addressed"})
+        for f in form_fields(task["form"], emp.form):  # 表单字段配置了 section：程序校验该章节确实提到了填写的值
+            if f.get("section") and isinstance(f["value"], str):
+                specs.append({"rule": "keyword_required", "name": f"表单要求：{f['label']}",
+                              "params": {"section": f["section"], "keywords": [f["value"]]}})
         prev = read_json(d / fb["prev_content_path"]) if fb and fb.get("prev_content_path") else None
         ctx = QCContext(content=read_json(d / art["content_path"]), texts=texts["sections"],
                         unresolved=texts["unresolved"], images=texts["images"], tables=texts["tables"], kpis=kpis,
@@ -525,7 +533,7 @@ class Orchestrator:
                         "\n\n## 质检修正\n根据 failures 中列出的问题修改 content，只改有问题的句子，其余保持不变，输出完整的 content。",
                         payload={"content": content, "failures": remaining, "overview": overview(kpis),
                                  "placeholders": placeholder_table(kpis), "placeholders_help": PLACEHOLDER_HELP},
-                        tools=["query_kpi"], output_schema=OUTPUT_SCHEMAS["fix"],
+                        tools=["query_kpi"], output_schema=output_schema("fix", emp.report),
                         max_turns=emp.limits["max_model_turns_per_step"], max_seconds=emp.limits["max_step_seconds"])
                 except (StepLimitExceeded, LLMUnavailable, ToolFailure, MissingInput) as e:
                     self._pause(tid, "step_failed", f"自动修正第 {n} 轮失败：{e}。可人工修改后重新质检，或重试。")
@@ -590,6 +598,10 @@ class Orchestrator:
             src = d / f["path"]
             shutil.copy(src, out / src.name)
             files.append({"name": src.name, "sha256": f["sha256"]})
+            if fmt == "md":  # Markdown 按文件名引用同目录的图表，交付包里要带上图片
+                for img in sorted(src.parent.glob("*.png")):
+                    shutil.copy(img, out / img.name)
+                    files.append({"name": img.name, "sha256": sha256_file(out / img.name)})
         for name in ("qc_report.json", "质检记录.md"):
             shutil.copy(d / "qc" / name, out / name)
             files.append({"name": name, "sha256": sha256_file(out / name)})
@@ -628,7 +640,7 @@ class Orchestrator:
         emp = load_employee(task["employee"])
         updates: dict[str, Any] = {"qc_rounds": 0, "resume_to": None}
         if content is not None:
-            jsonschema.validate(content, OUTPUT_SCHEMAS["fix"])
+            jsonschema.validate(content, output_schema("fix", emp.report))
             n = len(list((self.task_dir(tid) / "work").glob(f"content_v{task['version']}m*.json"))) + 1
             tag = f"v{task['version']}m{n}"
             res = self._render(task, emp, self._gateway(task, emp), content, task["version"], tag, "manual")

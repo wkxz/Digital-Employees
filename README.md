@@ -11,7 +11,7 @@
 
 ```bash
 make install        # 安装依赖（需要 uv）
-make test           # 单元测试 + 39 条用例 + 真实模型调用路径测试（共 66 项，全部离线）
+make test           # 单元测试 + 40 条用例 + 现场变更预演 + 真实模型调用路径测试（共 84 项，全部离线）
 make demo           # 命令行跑一条正常任务，停在“待审核”
 make ui             # Web 界面 http://localhost:8501
 ```
@@ -51,7 +51,7 @@ MINI_MODEL_NAME=deepseek-chat                    # 需支持 Function Calling
 
 ```bash
 uv run mini check-model     # 检查连通性、密钥、工具调用、JSON 输出和响应时间
-uv run mini cases           # 用真实模型跑全部用例（6 条依赖 Mock 注入错误的用例自动跳过）
+uv run mini cases           # 用真实模型跑全部用例（7 条依赖 Mock 注入错误的用例自动跳过）
 ```
 
 改回离线 Mock：`.env` 中设 `MINI_MODEL=mock`。单元测试（`make test`）始终使用 Mock，另有一组测试通过本地假 OpenAI 服务覆盖真实模型的 HTTP 调用路径。
@@ -77,7 +77,7 @@ src/mini_employee/
   render.py            占位符替换 + Word / Markdown 生成
   runner.py            用例批量运行器
 app/streamlit_app.py   Web 界面：发起任务 / 任务中心 / 审核台 / 事件回放 / 故障注入 / 员工配置
-cases/                 39 条自测用例（YAML），其中 U01–U07 基于用户提供的数据（data/user_cases/）
+cases/                 40 条自测用例（YAML），其中 U01–U07 基于用户提供的数据（data/user_cases/）
 data/samples/          主样例数据（模拟）；data/fixtures/ 用例变体数据
 scripts/make_sample_data.py  模拟数据生成器
 docs/技术报告.md        技术报告草稿
@@ -92,7 +92,7 @@ docs/技术报告.md        技术报告草稿
 | 退回意见被采纳 | 意见由程序按配置拆成待办（章节 + 关键词），只重做受影响的步骤；新增 `feedback_addressed` 质检逐条校验，不通过不能再次送审 |
 | 缺材料暂停、补充后继续 | 准入或执行中发现缺材料 → 待补材料，说明缺什么；补充后重新准入，从断点继续 |
 | 员工能力写成配置 | `employee.yaml` + `SKILL.md`，界面“员工配置”页可直接编辑 |
-| 轮次与时长上限 | 每步 8 轮 / 120 秒，任务 600 秒，超限暂停转人工（理由见下） |
+| 轮次与时长上限 | 每步 8 轮 / 180 秒，任务 600 秒，超限暂停转人工（理由见下） |
 | ≥3 个工具，明确入参出参，只能调开放的工具 | 7 个 MCP 工具，JSON Schema 入参；模型每步只看到该步开放的工具，越权调用被拒绝并留痕 |
 | 工具失败重试、暂停、不编造 | 网关指数退避重试 3 次，耗尽后暂停并提示“第几步、什么原因、已完成 x/y 步”；数字只能用占位符引用 |
 | ≥3 类自动质检，可修正，有上限，有记录 | 结构完整、数据一致性、异常归因有据、敏感信息、字数（+ 审核意见已采纳）；程序能确定性修正的先修，其余交模型，最多 2 轮；检验记录随交付包保存 |
@@ -117,8 +117,10 @@ docs/技术报告.md        技术报告草稿
 | 可能的变更 | 改哪里 |
 |---|---|
 | 新增质检规则，如“整体经营必须提到客单价” | `employee.yaml` 的 `quality_checks` 加 `keyword_required`（已有注释示例），不改代码 |
-| 表单加字段，如“报告接收人” | `employee.yaml` 的 `form`；报告中展示则在 `report.title` 或 `footer` 中引用 |
-| 交付格式加 Markdown | `report.output_formats: [docx, md]` |
+| 表单加字段，如“报告接收人” | `employee.yaml` 的 `form`（建议 `required: false`）；报告中展示则在 `report.title` 或 `footer` 中引用 `{字段key}` |
+| 表单加字段并要求报告体现，如“重点关注品类” | `form` 中该字段加 `guide`（怎么写）和 `section`（写在哪一章）；模型照做，程序自动加一条质检核对该章节提到了填写的值 |
+| 交付格式加 Markdown / HTML / PDF | `report.output_formats: [docx, md, html, pdf]`（docx 保持在首位，审核核对的是它的哈希）；HTML 单文件内嵌图表，PDF 内置中文字体、不依赖 Word |
+| 新增报告章节，如“风险提示” | `report.sections` 加一行 `{id: risks, title: 七、风险提示, kind: bullets, guide: "..."}`；撰写与修正的输出 Schema 随配置变化 |
 | 改异常阈值 / 摘要条数 | `analysis.anomaly_threshold`；`SKILL.md` 的撰写要求 + `length` 规则参数 |
 | 新增一类分析维度 | `analysis.dimensions`（region / store / category / rc） |
 | 全新质检逻辑 | `qc/rules.py` 写一个函数并 `@rule` 注册，再在配置中引用 |

@@ -234,9 +234,26 @@ class MockLLM:
             overall[0] = overall[0].replace("{{total.sales_wow|abs}}", f"{abs(tot['sales_wow_value']) * 100:.1f}%")
 
         content = {"summary": summary, "overall": overall, "regions": reg, "categories": cat, "next_week": nxt}
+        for sec in p.get("sections", []):  # 配置中新增的章节：真实模型按 guide 写，Mock 写一句占位
+            if sec["id"] not in content:
+                content[sec["id"]] = [f"{sec['title'].split('、')[-1]}：本周暂无需要特别说明的事项。"]
+        for f in p.get("form_fields", []):  # 表单字段要求体现在指定章节
+            sid = f.get("section")
+            if sid in content and not any(f["label"] in t for t in content[sid]):
+                content[sid].append(self._field_sentence(f, ov))
         for f in p.get("feedback") or []:
             self._apply_feedback(content, f, ov)
         return content
+
+    @staticmethod
+    def _field_sentence(f: dict, ov: dict) -> str:
+        val = str(f["value"])
+        if any(r["name"] == val for r in ov["regions"]):
+            return f"{f['label']}{val}区：销售额 {{{{region.{val}.sales}}}}，环比 {{{{region.{val}.sales_wow}}}}。"
+        if any(c["name"] == val for c in ov["categories"]):
+            return (f"{f['label']}{val}：销售额 {{{{category.{val}.sales}}}}，占比 {{{{category.{val}.share}}}}，"
+                    f"环比 {{{{category.{val}.sales_wow}}}}。")
+        return f"{f['label']}：{val}。"
 
     @staticmethod
     def _apply_feedback(content: dict, f: dict, ov: dict) -> None:
