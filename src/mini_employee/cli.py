@@ -12,6 +12,7 @@ from .fsutil import exclusive_lock
 from .orchestrator import Orchestrator
 from .states import INITIATOR, LABELS, REVIEWER, S, table_markdown
 from .store import IllegalTransition
+from .validate import ConfigError
 
 
 def _kv(items: list[str] | None) -> dict[str, Any]:
@@ -76,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("resume", help="恢复所有被中断的任务（断点恢复）")
     sub.add_parser("check-model", help="检查模型配置：连通性、工具调用、JSON 输出、响应时间")
+    p = sub.add_parser("check-config", help="检查员工配置（employee.yaml / SKILL.md），现场改完先跑一次")
+    p.add_argument("--employee", default="weekly_report")
     p = sub.add_parser("transitions", help="打印状态流转表")
     sub.add_parser("tools", help="列出工具及入参 Schema")
     p = sub.add_parser("cases", help="批量运行测试用例")
@@ -85,6 +88,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-j", dest="jobs", type=int, default=1, help="并行进程数（真实模型建议 4）")
 
     a = ap.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):  # Windows 中文环境输出被重定向时编码为 GBK，✓ 等符号替换显示而不报错
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+    if a.cmd == "check-config":
+        return check_config(a.employee)
     o = Orchestrator() if a.cmd not in ("transitions", "tools", "cases", "check-model") else None
     try:
         if a.cmd == "new":
@@ -160,7 +168,29 @@ def main(argv: list[str] | None = None) -> int:
     except IllegalTransition as e:
         print(f"操作被拒绝：{e}", file=sys.stderr)
         return 2
+    except ConfigError as e:
+        print("员工配置有误：\n" + "\n".join(f"  ✗ {x}" for x in e.errors), file=sys.stderr)
+        print("改正后运行 mini check-config 确认。", file=sys.stderr)
+        return 4
     return 0
+
+
+def check_config(employee: str) -> int:
+    from .config import parse_skill_md, read_employee_files
+    from .validate import validate
+    try:
+        d, raw, skill = read_employee_files(employee)
+    except Exception as e:  # noqa: BLE001  YAML 语法错误、文件不存在
+        print(f"✗ 无法读取 {employee} 的配置：{e}")
+        return 4
+    errors, warnings = validate(raw, parse_skill_md(skill)[1])
+    for x in errors:
+        print(f"✗ {x}")
+    for x in warnings:
+        print(f"! {x}")
+    if not errors:
+        print(f"✓ {d / 'employee.yaml'} 与 SKILL.md 校验通过" + (f"（{len(warnings)} 条提醒）" if warnings else ""))
+    return 4 if errors else 0
 
 
 if __name__ == "__main__":

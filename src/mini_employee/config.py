@@ -97,10 +97,23 @@ def parse_skill_md(text: str) -> tuple[dict[str, Any], dict[str, str]]:
     return meta, sections
 
 
-def load_employee(employee_id: str, base: Path | None = None) -> Employee:
+def read_employee_files(employee_id: str, base: Path | None = None) -> tuple[Path, dict[str, Any], str]:
+    """读取原始配置（不校验）：(目录, employee.yaml 内容, SKILL.md 文本)。"""
     d = (base or EMPLOYEES_DIR) / employee_id
-    raw = yaml.safe_load((d / "employee.yaml").read_text(encoding="utf-8"))
-    meta, sections = parse_skill_md((d / raw.get("skill", "SKILL.md")).read_text(encoding="utf-8"))
+    raw = yaml.safe_load((d / "employee.yaml").read_text(encoding="utf-8")) or {}
+    skill = d / raw.get("skill", "SKILL.md")
+    return d, raw, skill.read_text(encoding="utf-8") if skill.exists() else ""
+
+
+def load_employee(employee_id: str, base: Path | None = None) -> Employee:
+    """加载并校验员工配置；有错误时抛出 ConfigError，列出全部问题。"""
+    from .validate import ConfigError, validate
+
+    d, raw, skill_text = read_employee_files(employee_id, base)
+    meta, sections = parse_skill_md(skill_text)
+    errors, _ = validate(raw, sections)
+    if errors:
+        raise ConfigError(employee_id, errors)
     return Employee(id=raw["id"], name=raw["name"], dir=d, raw=raw, skill_meta=meta, skill_sections=sections)
 
 

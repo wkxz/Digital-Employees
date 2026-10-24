@@ -5,9 +5,12 @@
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Callable
+
+from .config import runs_dir
 
 
 class S(StrEnum):
@@ -39,10 +42,23 @@ INITIATOR, REVIEWER, SYSTEM = "initiator", "reviewer", "system"
 Guard = Callable[[dict[str, Any], dict[str, Any]], str | None]  # (task, ctx) -> 拒绝原因 / None
 
 
-def _g_qc_record_passed(task: dict, ctx: dict) -> str | None:
-    if not ctx.get("qc_passed"):
-        return "质检记录未全部通过"
+def _qc_record_problem(task: dict) -> str | None:
+    """读质检记录本身判定，不信任调用方传入的标志：最近一次质检须全部通过，且检的就是当前这份产物。"""
+    art = task.get("artifact") or {}
+    path = runs_dir() / task["id"] / "qc" / "qc_report.json"
+    try:
+        last = json.loads(path.read_text(encoding="utf-8"))["rounds"][-1]
+    except (OSError, ValueError, KeyError, IndexError):
+        return "没有质检记录"
+    if last.get("artifact_sha256") != art.get("sha256"):
+        return "最近一次质检的不是当前产物（文件哈希不同）"
+    if not last.get("passed"):
+        return "质检记录中有 blocking 规则未通过"
     return None
+
+
+def _g_qc_record_passed(task: dict, ctx: dict) -> str | None:
+    return _qc_record_problem(task)
 
 
 def _g_fix_left(task: dict, ctx: dict) -> str | None:
@@ -59,8 +75,8 @@ def _g_approve(task: dict, ctx: dict) -> str | None:
         return "没有可交付的产物"
     if ctx.get("reviewed_sha256") != art["sha256"]:
         return "审核的版本与当前产物不一致（文件哈希不同），请刷新后重新审核"
-    if not art.get("qc_passed"):
-        return "当前产物的质检未通过"
+    if (qc := _qc_record_problem(task)):
+        return f"当前产物的质检未通过：{qc}"
     return None
 
 

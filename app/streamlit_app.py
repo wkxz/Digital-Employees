@@ -12,17 +12,19 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import streamlit as st
 import yaml
 
-from mini_employee.config import ROOT, load_employee, runs_dir
+from mini_employee.config import EMPLOYEES_DIR, ROOT, load_employee, parse_skill_md, read_employee_files, runs_dir
 from mini_employee.fsutil import read_json
 from mini_employee.orchestrator import Orchestrator
 from mini_employee.render import build_blocks, write_md
 from mini_employee.states import INITIATOR, LABELS, REVIEWER, TERMINAL, S, table_markdown
 from mini_employee.store import IllegalTransition
+from mini_employee.validate import ConfigError, validate
 
 st.set_page_config(page_title="迷你数字员工", page_icon="📊", layout="wide")
 EMP_ID = "weekly_report"
@@ -52,12 +54,16 @@ def save_upload(f) -> Path:
     return p
 
 
-def act(fn, *args, **kw) -> bool:
+def act(fn, *args, **kw) -> Any:
+    """执行一个操作；失败时在页面上说明原因，而不是显示报错堆栈。成功返回 fn 的结果（至少为 True）。"""
     try:
-        fn(*args, **kw)
-        return True
+        return fn(*args, **kw) or True
     except IllegalTransition as e:
         st.error(f"操作被拒绝：{e}")
+    except ConfigError as e:
+        st.error("员工配置有误，请到“员工配置”页改正：\n\n" + "\n".join(f"- {x}" for x in e.errors))
+    except Exception as e:  # noqa: BLE001  如并发修改冲突、人工修改的内容不符合格式
+        st.error(f"操作失败：{type(e).__name__}: {e}")
     return False
 
 
@@ -67,13 +73,21 @@ st.sidebar.caption("经营周报员工 · 可审核、可交付")
 page = st.sidebar.radio("页面", ["发起任务", "任务中心", "审核台", "事件回放", "故障注入", "员工配置"])
 role = st.sidebar.selectbox("当前身份", [INITIATOR, REVIEWER], format_func=lambda r: {"initiator": "发起人",
                                                                                    "reviewer": "审核人"}[r])
-model = os.environ.get("MINI_MODEL") or load_employee(EMP_ID).raw.get("model", {}).get("provider", "mock")
+try:
+    model = os.environ.get("MINI_MODEL") or (read_employee_files(EMP_ID)[1].get("model") or {}).get("provider", "mock")
+except Exception:  # noqa: BLE001  YAML 写坏时下面会提示，这里不中断页面
+    model = "?"
 st.sidebar.caption(f"模型：{model}　数据目录：{runs_dir()}")
 if st.sidebar.button("🔄 刷新"):
     st.rerun()
 
 o = orch()
-emp = load_employee(EMP_ID)
+try:
+    emp = load_employee(EMP_ID)
+except Exception as e:  # noqa: BLE001  配置写错时其他页面无法工作，只开放“员工配置”页供改正
+    errs = e.errors if isinstance(e, ConfigError) else [str(e)]
+    st.error("员工配置有误，请在“员工配置”页改正后刷新：\n\n" + "\n".join(f"- {x}" for x in errs))
+    emp, page = None, "员工配置"
 
 
 def task_picker(states: set[S] | None = None, key: str = "pick") -> dict | None:
@@ -164,9 +178,10 @@ if page == "发起任务":
             elif use_sample and k in sample:
                 paths[k] = sample[k]
         faults = [{"tool": x.split(":")[0], "mode": x.split(":")[1]} for x in fs]
-        tid = o.create(EMP_ID, values, paths, {"faults": faults})
-        run_bg(tid)
-        st.success(f"已创建任务 {tid}，正在后台执行。到“任务中心”查看进度。")
+        tid = act(o.create, EMP_ID, values, paths, {"faults": faults})
+        if tid:
+            run_bg(tid)
+            st.success(f"已创建任务 {tid}，正在后台执行。到“任务中心”查看进度。")
 
 # ================================================================ 任务中心
 elif page == "任务中心":
@@ -307,20 +322,27 @@ elif page == "故障注入":
 # ================================================================ 员工配置
 elif page == "员工配置":
     st.header("员工配置")
-    st.caption("业务人员改这里即可调整员工做法，无需改代码。保存后对新执行的步骤生效。")
+    st.caption("业务人员改这里即可调整员工做法，无需改代码。保存前自动校验，有错误不会写入；保存后对新执行的步骤生效。")
     tab1, tab2, tab3 = st.tabs(["employee.yaml（结构）", "SKILL.md（做法）", "状态流转表"])
+    d = EMPLOYEES_DIR / EMP_ID
     for tab, name in ((tab1, "employee.yaml"), (tab2, "SKILL.md")):
         with tab:
-            p = emp.dir / name
+            p = d / name
             text = st.text_area(name, p.read_text(encoding="utf-8"), height=520, key=name)
             if st.button(f"保存 {name}", key=f"save_{name}"):
-                try:
-                    if name.endswith(".yaml"):
-                        yaml.safe_load(text)
-                    p.write_text(text, encoding="utf-8")
-                    load_employee(EMP_ID)
-                    st.success("已保存")
-                except Exception as e:  # noqa: BLE001
-                    st.error(f"配置有误，未保存：{e}")
+                try:  # 先校验改后的整套配置，通过了才写盘
+                    is_yaml = name.endswith(".yaml")
+                    raw = yaml.safe_load(text if is_yaml else (d / "employee.yaml").read_text(encoding="utf-8")) or {}
+                    skill = (d / "SKILL.md").read_text(encoding="utf-8") if is_yaml else text
+                    errors, warnings = validate(raw, parse_skill_md(skill)[1])
+                except Exception as e:  # noqa: BLE001  YAML 语法错误
+                    errors, warnings = [f"{type(e).__name__}: {e}"], []
+                if errors:
+                    st.error("配置有误，未保存：\n\n" + "\n".join(f"- {x}" for x in errors))
+                else:
+                    p.write_text(text, encoding="utf-8", newline="\n")
+                    st.success("已保存，校验通过")
+                for w in warnings:
+                    st.warning(w)
     with tab3:
         st.markdown(table_markdown())

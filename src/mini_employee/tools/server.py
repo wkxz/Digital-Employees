@@ -209,7 +209,7 @@ def generate_report(
     for fmt in formats:
         if fmt not in R.WRITERS:
             raise ToolError(encode(INVALID_INPUT, f"不支持的交付格式 {fmt}，可选 {list(R.WRITERS)}"))
-        name = report_config["filename"].format(**meta) + f".{fmt}"
+        name = report_config["filename"].format_map(R._Default(meta)) + f".{fmt}"
         path = out_dir / name
         digest, hit = idempotent_write(path, input_hash, lambda tmp, w=R.WRITERS[fmt]: w(blocks, tmp))
         reused = reused and hit

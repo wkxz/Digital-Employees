@@ -116,7 +116,48 @@ def test_pdf_writer_is_deterministic(tmp_path):
     assert (tmp_path / "a.pdf").read_bytes() == (tmp_path / "b.pdf").read_bytes()
 
 
-def test_unsupported_format_pauses_with_clear_message(edit_employee, orch, sample_files):
+def test_unsupported_format_is_rejected_before_running(edit_employee, orch, sample_files):
+    from mini_employee.validate import ConfigError
     edit_employee(lambda r: r["report"].__setitem__("output_formats", ["docx", "pptx"]))
-    tid, state = _run(orch, sample_files)
-    assert state == S.SUSPENDED and "不支持的交付格式 pptx" in orch.store.get(tid)["pause_reason"]
+    with pytest.raises(ConfigError) as e:
+        _run(orch, sample_files)
+    assert any("pptx 不支持" in x for x in e.value.errors)
+
+
+# ---------------------------------------------------------------- 配置校验：写错的地方在发起任务前就报出来
+
+@pytest.mark.parametrize("change, expected", [
+    (lambda r: r["quality_checks"].append({"rule": "keyword_requird", "params": {"keywords": ["客单价"]}}),
+     "规则不存在"),
+    (lambda r: r["steps"][4].__setitem__("skill_sections", ["岗位职责", "异常分折"]), "“异常分折” 在 SKILL.md 中不存在"),
+    (lambda r: r["form"].append({"key": "x", "label": "X", "type": "enum", "options": ["A"], "section": "nope"}),
+     "section “nope”"),
+    (lambda r: r["report"].__setitem__("footer", "报送：{recipient}"), "引用了 {recipient}"),
+    (lambda r: r["report"]["sections"].insert(0, {"id": "risks", "kind": "bullets"}), "缺少 title"),
+    (lambda r: r["analysis"].__setitem__("anomaly_threshold", 15), "anomaly_threshold"),
+    (lambda r: r["steps"][5].__setitem__("tools", ["query_kpi", "send_email"]), "send_email 不在 tools 列表中"),
+])
+def test_config_mistakes_are_reported(edit_employee, change, expected):
+    from mini_employee.cli import check_config
+    from mini_employee.config import load_employee
+    from mini_employee.validate import ConfigError
+    edit_employee(change)
+    with pytest.raises(ConfigError) as e:
+        load_employee("weekly_report")
+    assert any(expected in x for x in e.value.errors), e.value.errors
+    assert check_config("weekly_report") == 4
+
+
+def test_current_config_is_valid(capsys):
+    from mini_employee.cli import check_config
+    assert check_config("weekly_report") == 0
+    assert "校验通过" in capsys.readouterr().out
+
+
+def test_config_broken_mid_task_pauses_with_reason(edit_employee, orch, sample_files):
+    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files, {"faults": [{"tool": "llm", "mode": "timeout"}]})
+    assert orch.drive(tid) == S.SUSPENDED  # 执行到一半暂停
+    edit_employee(lambda r: r["quality_checks"].append({"rule": "no_such_rule"}))  # 期间有人把配置改错了
+    assert orch.retry(tid, clear_faults=True) == S.SUSPENDED
+    reason = orch.store.get(tid)["pause_reason"]
+    assert "配置有误" in reason and "no_such_rule" in reason and "check-config" in reason

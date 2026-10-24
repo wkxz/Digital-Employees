@@ -131,9 +131,16 @@ class Store:
         dst = t.dst or S(task["resume_to"])
         if dst not in (S.SUSPENDED, S.WAITING_INPUT) and "pause_reason" not in updates:
             updates["pause_reason"] = None
-        self.update(tid, expect_row_version=task["row_version"], state=dst, **updates)
-        self.event(tid, "state_changed", None, {"from": task["state"], "to": dst, "event": event, "actor": actor,
-                                                "reason": ctx.get("reason")})
+        # 状态与对应事件在同一事务内写入：要么都成功，要么都不生效，不会出现“状态变了却没有留痕”
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.update(tid, expect_row_version=task["row_version"], state=dst, **updates)
+            self.event(tid, "state_changed", None, {"from": task["state"], "to": dst, "event": event, "actor": actor,
+                                                    "reason": ctx.get("reason")})
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
+        self.db.execute("COMMIT")
         return dst
 
     def unfinished(self) -> list[dict[str, Any]]:

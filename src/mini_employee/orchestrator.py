@@ -25,8 +25,9 @@ from .render import anomaly_flat
 from .states import AUTO, INITIATOR, REVIEWER, SYSTEM, S
 from .store import IllegalTransition, Store
 from .tools import server as tool_server
-from .tools.errors import INVALID_INPUT, MISSING_INPUT, ToolDenied, ToolFailure
+from .tools.errors import INTERNAL, INVALID_INPUT, MISSING_INPUT, ToolDenied, ToolFailure
 from .tools.gateway import ToolGateway, load_faults
+from .validate import ConfigError
 
 
 class Orchestrator:
@@ -171,6 +172,11 @@ class Orchestrator:
                  S.REWORK: self._on_running, S.QC: self._on_qc, S.AUTO_FIXING: self._on_fixing}[st](task, resumed)
             except IllegalTransition:
                 raise
+            except ConfigError as e:  # 任务执行中配置被改错：暂停，改正配置后重试即可
+                if st == S.CREATED:
+                    raise
+                self.store.event(tid, "error", None, {"state": st, "error": str(e)})
+                self._pause(tid, "step_failed", f"{e}。请改正 employee.yaml / SKILL.md（可先运行 mini check-config）后重试。")
             except Exception as e:  # 兜底：任何意外都转人工，不崩溃
                 if st == S.CREATED:
                     raise
@@ -239,6 +245,8 @@ class Orchestrator:
                 self._pause(tid, "admission_missing", e.message + "。请补充后继续。", resume_to=S.RUNNING)
             elif e.kind == INVALID_INPUT:
                 self.store.transition(tid, "admission_invalid", SYSTEM, {"reason": e.message}, pause_reason=e.message)
+            elif e.kind == INTERNAL:
+                self._pause(tid, "step_failed", f"准入校验时{e.tool}出错：{e.message}。已保留断点，可重试。")
             else:
                 self._pause(tid, "step_failed", f"准入校验时{e.tool}不可用：{e.message}。可稍后重试。")
             return

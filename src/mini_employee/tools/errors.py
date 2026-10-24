@@ -5,6 +5,7 @@ TRANSIENT = "TRANSIENT"        # 可重试：超时、连接断开、服务 5xx
 MISSING_INPUT = "MISSING_INPUT"  # 不可重试：缺材料 → 待补材料
 BAD_ARGS = "BAD_ARGS"          # 不可重试：参数错 → 回给模型自行纠正
 INVALID_INPUT = "INVALID_INPUT"  # 不可重试：输入不合规 → 拒绝
+INTERNAL = "INTERNAL"          # 不可重试：工具内部的程序错误（未分类异常）→ 暂停转人工，重试无用
 
 
 def encode(kind: str, message: str) -> str:
@@ -12,10 +13,13 @@ def encode(kind: str, message: str) -> str:
 
 
 def decode(text: str) -> tuple[str, str]:
-    for kind in (TRANSIENT, MISSING_INPUT, BAD_ARGS, INVALID_INPUT):
+    for kind in (TRANSIENT, MISSING_INPUT, BAD_ARGS, INVALID_INPUT, INTERNAL):
         if text.startswith(kind + ":"):
             return kind, text[len(kind) + 1:].strip()
-    return TRANSIENT, text  # 未分类异常按可重试处理，重试耗尽后暂停转人工
+    # 未分类异常是工具代码本身的错误（如 KeyError），同样的输入重试结果不变，直接暂停；
+    # 超时、连接断开等真正的临时故障由网关识别为 TRANSIENT 并重试
+    return INTERNAL, f"工具内部错误：{text}"
+
 
 
 class ToolFailure(Exception):

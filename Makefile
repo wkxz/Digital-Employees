@@ -3,7 +3,7 @@ RUN = $(UV) run
 # 模拟数据为 2026 年第 44 周，演示时把“今天”固定在该周之后
 export MINI_TODAY ?= 2026-11-03
 
-.PHONY: install data test cases ui demo transitions check-model clean
+.PHONY: install data test cases ui demo transitions check-model check-config clean
 
 install:            ## 安装依赖（需要 uv：https://docs.astral.sh/uv/）
 	$(UV) sync
@@ -27,6 +27,9 @@ demo:               ## 命令行跑一遍正常任务（发起 → 质检 → �
 
 check-model:        ## 检查 .env 中的模型配置
 	$(RUN) mini check-model
+
+check-config:       ## 检查员工配置（现场改完 employee.yaml / SKILL.md 后先跑）
+	$(RUN) mini check-config
 
 transitions:        ## 打印状态流转表
 	$(RUN) mini transitions
