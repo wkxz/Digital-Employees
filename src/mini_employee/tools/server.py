@@ -52,17 +52,26 @@ def read_sales_data(
     column_aliases: dict[str, list[str]],
     max_bad_ratio: float = 0.05,
     strict: bool = True,
+    data_config: Annotated[dict[str, Any] | None, Field(description="明细工作表名、主数据关联（lookups）、销售目标表")] = None,
+    master_file: Annotated[str | None, Field(description="主数据文件（任务目录内相对路径），上传的文件没有主数据工作表时使用")] = None,
 ) -> dict[str, Any]:
-    """读取、合并并清洗销售明细：识别列名别名、检查必需列、剔除重复/空值/负数行。strict=True 时缺列或脏数据过多直接报缺材料。"""
+    """读取、合并并清洗销售明细：识别列名别名、按编码关联门店 / 商品主数据、检查必需列、去重、剔除空值与非退货负数行。
+    strict=True 时缺列或脏数据过多直接报缺材料。"""
     paths = [_inside(task_dir, f) for f in file_paths]
     for f, path in zip(file_paths, paths):
         if not path.exists():
             raise ToolError(encode(MISSING_INPUT, f"找不到销售明细文件：{f}"))
     try:
-        df, info = D.load_sales_many(paths, column_aliases, required_columns)
+        master = D.read_master(_inside(task_dir, master_file) if master_file else None)
+        df, info = D.load_sales_many(paths, column_aliases, required_columns, data_config, master)
     except D.DataError as e:
         raise _fail(e) from e
+    targets = info.pop("targets", [])
+    info["target_weeks"] = sorted({t["week"] for t in targets})
     if info["missing_columns"]:
+        if info["lookups"].get("missing_sheets"):
+            info["missing_hint"] = (f"未找到主数据工作表 {info['lookups']['missing_sheets']}，"
+                                    "请上传包含门店信息、商品信息工作表的 xlsx，或由管理员配置主数据文件")
         if strict:
             raise ToolError(encode(MISSING_INPUT, f"销售明细缺少必需列 {info['missing_columns']}，"
                                                   f"文件实际列为 {info['columns']}"))
@@ -82,6 +91,7 @@ def read_sales_data(
         out.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(out, index=False)
         info["table_path"] = "work/sales_clean.csv"
+        write_json(_inside(task_dir, "work/targets.json"), targets)
     return info
 
 

@@ -23,6 +23,17 @@ form:
   #    guide: "在“品类表现”中单独写一句该品类的销售额、占比和环比", section: categories}
   # - {key: recipient, label: 报告接收人, type: string, required: false}
 
+# ---------------------------------------------------------------- 数据结构
+# 明细里只有门店编码、商品编码时，按编码从主数据补齐区域、品类等列；明细里已有这些列（旧格式）时不关联。
+# 主数据优先取上传 xlsx 中的同名工作表，没有时（如只上传 CSV）用 master_file（放在本目录）。
+data:
+  sheet: 销售明细                # xlsx 中明细所在的工作表，找不到时读第一个
+  master_file: master.xlsx
+  lookups:
+    - {sheet: 门店信息, key: 门店编码, fields: [区域, 店型, 开业日期]}
+    - {sheet: 商品信息, key: 商品编码, fields: [品类]}
+  targets: {sheet: 销售目标, week: 周次, region: 区域, value: 实收目标(元)}
+
 # ---------------------------------------------------------------- 准入校验
 admission:
   required_columns: [日期, 门店, 区域, 品类, 销售额, 销量]
@@ -31,9 +42,13 @@ admission:
     门店: [门店名称, 店铺, 店名, store]
     区域: [大区, 片区, region]
     品类: [类别, 品类名称, category]
-    销售额: [金额, 销售金额, 营业额, sales]
+    销售额: [实收金额, 金额, 销售金额, 营业额, sales]   # 实收 = 原价 − 折扣，退货为负数
     销量: [数量, 件数, 销售数量, qty]
     订单数: [单数, 客流, 交易笔数, orders]
+    成本: [成本金额]
+    渠道: [销售渠道]
+    商品: [商品名称, 单品]
+    记录ID: [记录编号, 流水号]
   require_previous_week: true   # 需要上一周数据才能算环比
   max_bad_row_ratio: 0.05       # 重复/空值/负数行超过 5% 则暂停，请发起人核对数据
   pii_policy: reject            # reject：含个人隐私直接拒绝；redact：脱敏后继续
@@ -62,6 +77,8 @@ steps:
       required_columns: $admission.required_columns
       column_aliases: $admission.column_aliases
       max_bad_ratio: $admission.max_bad_row_ratio
+      data_config: $data
+      master_file: work/master.xlsx
   - id: kpi
     name: 计算指标与识别异常
     type: tool

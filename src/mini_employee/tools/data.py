@@ -22,17 +22,67 @@ class DataError(Exception):
 
 # ---------------------------------------------------------------- 销售数据
 
-def read_table(path: Path) -> pd.DataFrame:
+def read_book(path: Path, sheet: str | None = None) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+    """读取销售数据文件，返回 (明细表, 其他工作表)。xlsx 有名为 sheet 的工作表时读它，否则读第一个工作表；
+    其他工作表（门店信息、商品信息、销售目标等主数据）一并返回，供关联使用。"""
     ext = path.suffix.lower()
     if ext in (".xlsx", ".xls"):
-        return pd.read_excel(path)
+        book = pd.read_excel(path, sheet_name=None)
+        name = sheet if sheet in book else next(iter(book))
+        return book[name], {k: v for k, v in book.items() if k != name}
     if ext == ".csv":
         for enc in ("utf-8-sig", "gbk"):
             try:
-                return pd.read_csv(path, encoding=enc)
+                return pd.read_csv(path, encoding=enc), {}
             except UnicodeDecodeError:
                 continue
     raise DataError("INVALID_INPUT", f"不支持的销售数据格式：{path.suffix}（支持 xlsx / csv）")
+
+
+def read_table(path: Path) -> pd.DataFrame:
+    return read_book(path)[0]
+
+
+def read_master(path: Path | None) -> dict[str, pd.DataFrame]:
+    """员工配置自带的主数据（门店信息、商品信息、销售目标），只上传 CSV 明细时用它关联区域、品类和目标。"""
+    if path is None or not path.exists():
+        return {}
+    return pd.read_excel(path, sheet_name=None)
+
+
+def apply_lookups(df: pd.DataFrame, lookups: list[dict[str, Any]], sources: dict[str, pd.DataFrame]
+                  ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """按编码从主数据表补齐明细中没有的列（如 门店编码 → 区域、开业日期；商品编码 → 品类）。
+    明细里已有这些列（旧格式数据）时不关联。"""
+    info: dict[str, Any] = {"joined": [], "missing_sheets": [], "unmatched": {}}
+    for lk in lookups:
+        key, fields = lk["key"], [f for f in lk["fields"] if f not in df.columns]
+        if key not in df.columns or not fields:
+            continue
+        table = sources.get(lk["sheet"])
+        if table is None or key not in table.columns:
+            info["missing_sheets"].append(lk["sheet"])
+            continue
+        right = table[[key] + [f for f in fields if f in table.columns]].drop_duplicates(key)
+        right[key] = right[key].astype(str).str.strip()
+        df = df.assign(**{key: df[key].astype(str).str.strip()}).merge(right, on=key, how="left")
+        bad = sorted(df.loc[df[fields[0]].isna(), key].dropna().unique().tolist())
+        if bad:
+            info["unmatched"][lk["sheet"]] = bad[:10]
+        info["joined"].append(f"{lk['sheet']}（按{key}补充{'、'.join(fields)}）")
+    return df, info
+
+
+def read_targets(cfg: dict[str, Any] | None, sources: dict[str, pd.DataFrame]) -> list[dict[str, Any]]:
+    """销售目标表 → [{week: "W44", region, target}]。"""
+    if not cfg or cfg.get("sheet") not in sources:
+        return []
+    t = sources[cfg["sheet"]]
+    cols = (cfg.get("week", "周次"), cfg.get("region", "区域"), cfg.get("value", "实收目标(元)"))
+    if not all(c in t.columns for c in cols):
+        return []
+    return [{"week": str(w).strip().upper(), "region": str(r).strip(), "target": float(v)}
+            for w, r, v in t[list(cols)].dropna().itertuples(index=False)]
 
 
 def normalize_columns(df: pd.DataFrame, aliases: dict[str, list[str]]) -> tuple[pd.DataFrame, dict[str, str]]:
@@ -83,13 +133,19 @@ def find_pii(df: pd.DataFrame) -> list[str]:
     return hits
 
 
-def load_sales(path: Path, aliases: dict[str, list[str]], required: list[str]) -> tuple[pd.DataFrame, dict[str, Any]]:
-    raw = read_table(path)
+def load_sales(path: Path, aliases: dict[str, list[str]], required: list[str],
+               data_cfg: dict[str, Any] | None = None, master: dict[str, pd.DataFrame] | None = None,
+               ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    data_cfg = data_cfg or {}
+    raw, sheets = read_book(path, data_cfg.get("sheet"))
     df, mapping = normalize_columns(raw, aliases)
+    sources = {**(master or {}), **sheets}  # 上传文件自带的主数据优先于员工配置自带的
+    df, joined = apply_lookups(df, data_cfg.get("lookups", []), sources)
     missing = [c for c in required if c not in df.columns]
     info: dict[str, Any] = {
         "rows": int(len(df)), "columns": [str(c) for c in raw.columns], "alias_mapping": mapping,
-        "missing_columns": missing, "pii_columns": find_pii(raw),
+        "missing_columns": missing, "pii_columns": find_pii(raw), "lookups": joined,
+        "targets": read_targets(data_cfg.get("targets"), sources),
     }
     if not missing:
         dates = pd.to_datetime(df["日期"], errors="coerce").dropna()
@@ -103,13 +159,14 @@ def load_sales(path: Path, aliases: dict[str, list[str]], required: list[str]) -
 KEY = ["日期", "门店", "品类"]
 
 
-def load_sales_many(paths: list[Path], aliases: dict[str, list[str]], required: list[str]
+def load_sales_many(paths: list[Path], aliases: dict[str, list[str]], required: list[str],
+                    data_cfg: dict[str, Any] | None = None, master: dict[str, pd.DataFrame] | None = None,
                     ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """读取并合并多份销售明细（如先传本周、再补传上周）。各文件分别识别列名；
     同一 日期+门店+品类 在多份文件中都出现时，以后上传的文件为准（补传更正版即可覆盖）。"""
     loaded = []
     for i, p in enumerate(paths):
-        df, info = load_sales(p, aliases, required)
+        df, info = load_sales(p, aliases, required, data_cfg, master)
         df["_src"] = i
         dates = set(pd.to_datetime(df["日期"], errors="coerce").dropna().dt.date) if "日期" in df.columns else set()
         loaded.append((p, df, info, dates))
@@ -130,8 +187,9 @@ def load_sales_many(paths: list[Path], aliases: dict[str, list[str]], required: 
     df = pd.concat(frames, ignore_index=True)
     overridden = 0
     if len(paths) > 1 and not missing:
-        key = df[KEY].assign(日期=pd.to_datetime(df["日期"], errors="coerce"))
-        latest = df.groupby([key[c] for c in KEY], dropna=False)["_src"].transform("max")
+        cols = ["记录ID"] if "记录ID" in df.columns else KEY + [c for c in ("商品", "渠道") if c in df.columns]
+        key = df[cols].assign(**({"日期": pd.to_datetime(df["日期"], errors="coerce")} if "日期" in cols else {}))
+        latest = df.groupby([key[c] for c in cols], dropna=False)["_src"].transform("max")
         stale = df["_src"] < latest
         overridden = int(stale.sum())
         df = df[~stale]
@@ -143,6 +201,9 @@ def load_sales_many(paths: list[Path], aliases: dict[str, list[str]], required: 
                   for p, inf in zip(paths, infos)],
         "overridden_rows": overridden, "superseded_files": superseded,
         "superseded_index": superseded_idx,
+        "lookups": {k: v for inf in infos for k, v in inf["lookups"].items() if k != "joined"}
+        | {"joined": list(dict.fromkeys(j for inf in infos for j in inf["lookups"]["joined"]))},
+        "targets": next((inf["targets"] for inf in reversed(infos) if inf["targets"]), []),
     }
     if not missing:
         dates = pd.to_datetime(df["日期"], errors="coerce").dropna()
@@ -155,49 +216,78 @@ def load_sales_many(paths: list[Path], aliases: dict[str, list[str]], required: 
 
 def _row_desc(r: pd.Series) -> str:
     d = r["日期"].strftime("%m-%d") if pd.notna(r["日期"]) else "日期缺失"
-    return f"{d} {r.get('门店', '')} {r.get('品类', '') if pd.notna(r.get('品类')) else ''}".strip()
+    what = r.get("商品") if pd.notna(r.get("商品", None)) else r.get("品类", "")
+    return f"{d} {r.get('门店', '')} {what if pd.notna(what) else ''}".strip()
+
+
+def _iso(d: Any) -> str | None:
+    return d.date().isoformat() if pd.notna(d) else None
+
+
+def _dedupe(df: pd.DataFrame, issues: list[dict[str, Any]]) -> tuple[pd.DataFrame, int]:
+    """有记录ID时按记录ID去重（重复上传），按门店、日期汇总成一条说明；没有时按整行完全相同去重。"""
+    if "记录ID" not in df.columns:
+        dup = df.duplicated()
+        for _, r in df[dup].iterrows():
+            issues.append({"row": _row_desc(r), "date": _iso(r["日期"]), "kind": "duplicate",
+                           "problem": "与另一行完全相同", "action": "删除重复行"})
+        return df[~dup], int(dup.sum())
+    dup = df["记录ID"].notna() & df.duplicated("记录ID")
+    same = df.duplicated()
+    for (store, day), g in df[dup].groupby(["门店", "日期"], dropna=False):
+        n_conf = int((~same[g.index]).sum())
+        issues.append({
+            "row": f"{day.strftime('%m-%d') if pd.notna(day) else '日期缺失'} {store}", "date": _iso(day),
+            "kind": "duplicate", "count": int(len(g)), "amount": round(float(g["销售额"].sum()), 2),
+            "problem": f"记录ID 重复 {len(g)} 条（实收合计 {g['销售额'].sum():,.0f} 元）"
+                       + (f"，其中 {n_conf} 条与首条内容不同" if n_conf else "，与已有记录完全相同，属重复上传"),
+            "action": "按记录ID去重，只保留首条" + ("，内容不同的请核实" if n_conf else "")})
+    return df[~dup], int(dup.sum())
 
 
 def clean_sales(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """清洗规则（每一处处理都记入 issues，供附录和审核人逐条核对）：
-    - 完全相同的重复行：删除（按 日期+门店+品类 判定，销售额为 0 的停业记录不会被误判为重复）
-    - 关键字段为空、销售额为负（含 -9999 之类的占位值）：整行剔除
+    """清洗规则（每一处处理都记入 issues，供“数据质量说明”和审核人逐条核对）：
+    - 重复：有记录ID时按记录ID去重（重复上传），否则删除完全相同的行（销售额为 0 的停业记录不会被误判为重复）
+    - 关键字段为空：整行剔除
+    - 退货（销量、销售额均为负）：保留，按负数冲减当期实收
+    - 销售额为负但不是退货（含 -9999 之类的占位值）：整行剔除
     - 销售额正常但销量为负：保留销售额，该行销量不计入
     - 销售额为 0：保留（多为停业），按门店汇总日期，便于与纪要核对
     """
     total = len(df)
     df = df.copy()
     df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
-    for c in ("销售额", "销量", "订单数"):
+    for c in ("销售额", "销量", "订单数", "成本"):
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     issues: list[dict[str, Any]] = []
-    dup_mask = df.duplicated()
-    for _, r in df[dup_mask].iterrows():
-        issues.append({"row": _row_desc(r), "problem": "与另一行完全相同", "action": "删除重复行"})
-    df = df[~dup_mask]
+    df, n_dup = _dedupe(df, issues)
     null_mask = df[["日期", "门店", "区域", "品类", "销售额"]].isna().any(axis=1)
     for _, r in df[null_mask].iterrows():
         cols = [c for c in ("日期", "门店", "区域", "品类", "销售额") if pd.isna(r[c])]
-        issues.append({"row": _row_desc(r), "problem": f"{'、'.join(cols)}为空", "action": "整行剔除"})
-    neg_sales = (df["销售额"] < 0) & ~null_mask
+        issues.append({"row": _row_desc(r), "date": _iso(r["日期"]), "kind": "null",
+                       "problem": f"{'、'.join(cols)}为空", "action": "整行剔除"})
+    returns = (df["销售额"] < 0) & (df["销量"] < 0) & ~null_mask
+    neg_sales = (df["销售额"] < 0) & ~null_mask & ~returns
     for _, r in df[neg_sales].iterrows():
         v = r["销售额"]
         hint = "，疑似占位值" if v in (-9999, -999, -99999, -1) else ""
-        issues.append({"row": _row_desc(r), "problem": f"销售额为 {v:g}{hint}", "action": "整行剔除"})
+        issues.append({"row": _row_desc(r), "date": _iso(r["日期"]), "kind": "negative",
+                       "problem": f"销售额为 {v:g}{hint}", "action": "整行剔除"})
     df = df[~null_mask & ~neg_sales].copy()
-    bad_qty = df["销量"].isna() | (df["销量"] < 0)
+    bad_qty = df["销量"].isna() | ((df["销量"] < 0) & (df["销售额"] >= 0))
     for _, r in df[bad_qty].iterrows():
-        issues.append({"row": _row_desc(r), "problem": f"销量为 {r['销量']:g}" if pd.notna(r["销量"]) else "销量为空",
+        issues.append({"row": _row_desc(r), "date": _iso(r["日期"]), "kind": "qty",
+                       "problem": f"销量为 {r['销量']:g}" if pd.notna(r["销量"]) else "销量为空",
                        "action": "保留销售额，该行销量不计入"})
     df.loc[bad_qty, "销量"] = float("nan")
     zero = df[df["销售额"] == 0]
     zero_days = {store: sorted(g["日期"].dt.strftime("%m-%d").unique()) for store, g in zero.groupby("门店")}
-    dropped = int(dup_mask.sum() + null_mask.sum() + neg_sales.sum())
+    dropped = int(n_dup + null_mask.sum() + neg_sales.sum())
     return df, {
-        "total_rows": total, "duplicates": int(dup_mask.sum()), "null_rows": int(null_mask.sum()),
-        "negative_rows": int(neg_sales.sum()), "bad_qty_rows": int(bad_qty.sum()), "zero_sales_rows": int(len(zero)),
-        "zero_sales_days": zero_days, "kept_rows": int(len(df)),
+        "total_rows": total, "duplicates": n_dup, "null_rows": int(null_mask.sum()),
+        "negative_rows": int(neg_sales.sum()), "return_rows": int(returns.sum()), "bad_qty_rows": int(bad_qty.sum()),
+        "zero_sales_rows": int(len(zero)), "zero_sales_days": zero_days, "kept_rows": int(len(df)),
         "bad_ratio": round((dropped + int(bad_qty.sum())) / total, 4) if total else 0.0, "issues": issues,
     }
 

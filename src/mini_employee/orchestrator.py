@@ -152,8 +152,6 @@ class Orchestrator:
                 except ValueError as e:
                     errors.append(f"{label}：{e}")
                     continue
-                if w.end >= today():
-                    errors.append(f"{label} {w.key}（截至 {w.end}）尚未结束，无法生成周报")
             elif fld["type"] == "enum" and v not in fld.get("options", []):
                 errors.append(f"{label}的取值“{v}”不在可选范围 {fld['options']} 内")
             elif fld["type"] == "string" and len(str(v)) > fld.get("max_length", 200):
@@ -208,6 +206,32 @@ class Orchestrator:
             self.store.transition(task["id"], "submit", SYSTEM, {"form_errors": errors})
 
     # ---------------------------------------------------------------- ADMISSION
+    MASTER_REL = "work/master.xlsx"
+
+    def _copy_master(self, tid: str, emp: Employee) -> str | None:
+        """员工配置自带的主数据（门店信息、商品信息、销售目标）复制进任务目录，工具只能读任务目录内的文件。"""
+        name = (emp.raw.get("data") or {}).get("master_file")
+        if not name or not (emp.dir / name).exists():
+            return None
+        dst = self.task_dir(tid) / self.MASTER_REL
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(emp.dir / name, dst)
+        return self.MASTER_REL
+
+    @staticmethod
+    def _coverage_problem(week: Any, info: dict[str, Any]) -> str | None:
+        """统计周期超出销售数据实际覆盖的日期范围：说明数据覆盖到哪天，不输出该周任何数字。
+        该周只有部分日期的数据时由“计算指标”步骤列出缺少的日期并暂停。"""
+        dr = info.get("date_range")
+        if not dr:
+            return f"销售明细中没有可识别的销售日期，无法生成统计周期 {week.key} 的周报"
+        span = f"销售数据实际覆盖 {dr[0]} 至 {dr[1]}"
+        not_over = "（该周尚未结束）" if week.end >= today() else ""
+        if not info.get("has_current_week"):
+            return (f"{span}，不包含统计周期 {week.key}（{week.start}～{week.end}）{not_over}，无法生成该周周报。"
+                    "请上传包含该周的销售数据，或改选数据范围内的周期")
+        return None
+
     def _on_admission(self, task: dict, resumed: bool) -> None:
         tid = task["id"]
         emp = load_employee(task["employee"])
@@ -226,12 +250,14 @@ class Orchestrator:
         info: dict[str, Any] | None = None
         minutes: dict[str, Any] | None = None
         # 已上传的材料都检查一遍，一次说清所有问题，避免发起人补一样、再被要求补另一样
+        master = self._copy_master(tid, emp)
         try:
             if have("sales_file"):
                 info = gw.call("read_sales_data", {
                     "file_paths": have("sales_file"), "period": task["form"]["period"],
                     "required_columns": adm["required_columns"], "column_aliases": adm["column_aliases"],
-                    "max_bad_ratio": adm["max_bad_row_ratio"], "strict": False}, allowed=emp.tools, step_id="admission")
+                    "max_bad_ratio": adm["max_bad_row_ratio"], "strict": False,
+                    "data_config": emp.raw.get("data"), "master_file": master}, allowed=emp.tools, step_id="admission")
             if have("minutes_file"):
                 try:
                     minutes = gw.call("read_minutes", {"file_path": task["form"]["minutes_file"]}, allowed=emp.tools,
@@ -255,16 +281,18 @@ class Orchestrator:
         if info is not None:
             before = len(problems)
             if info["missing_columns"]:
+                hint = f"{info['missing_hint']}；" if info.get("missing_hint") else ""
                 problems.append(f"销售明细缺少必需列 {info['missing_columns']}（文件实际列：{info['columns']}）。"
-                                "请补充该列后重新上传，或由管理员在配置中添加列名别名")
+                                f"{hint}请补充该列后重新上传，或由管理员在配置中添加列名别名")
             elif reject and info["pii_columns"]:
                 msg = f"销售明细包含个人隐私信息（列：{'、'.join(info['pii_columns'])}），按规定不能处理，请脱敏后重新发起任务"
                 self.store.transition(tid, "admission_invalid", SYSTEM, {"reason": msg}, pause_reason=msg)
                 return
             else:
-                if not info.get("has_current_week"):
-                    problems.append(f"销售明细中没有统计周期 {week.key} 的数据（数据覆盖 {info.get('date_range')}）")
-                if adm.get("require_previous_week") and not info.get("has_prev_week"):
+                cover = self._coverage_problem(week, info)
+                if cover:
+                    problems.append(cover)
+                if adm.get("require_previous_week") and info.get("has_current_week") and not info.get("has_prev_week"):
                     problems.append(f"缺少上一周（{week.prev.key}，{week.prev.start}~{week.prev.end}）的销售数据，无法计算环比。"
                                     "请补充上传（可只上传上周数据，系统会与已上传的数据自动合并）")
                 c = info.get("cleaning", {})
@@ -290,8 +318,10 @@ class Orchestrator:
     # ---------------------------------------------------------------- RUNNING / REWORK
     def _resolve(self, v: Any, task: dict, emp: Employee) -> Any:
         if isinstance(v, str) and v.startswith("$"):
-            section, key = v[1:].split(".", 1)
-            return task["form"].get(key) if section == "form" else emp.raw[section][key]
+            section, _, key = v[1:].partition(".")
+            if section == "form":
+                return task["form"].get(key)
+            return emp.raw[section][key] if key else emp.raw[section]  # $data 引用整个配置段
         if isinstance(v, dict):
             return {k: self._resolve(x, task, emp) for k, x in v.items()}
         if isinstance(v, list):
