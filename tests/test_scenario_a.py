@@ -143,3 +143,24 @@ def test_missing_driver_stores_appended_by_program():
     _label_drivers(item, [{"store": "上海静安店", "label": "上海静安店（SH02）", "wow": -0.177},
                           {"store": "上海徐汇店", "label": "上海徐汇店（SH01）", "wow": -0.198}])
     assert item["phenomenon"] == "华东五店同步下滑，主要受上海静安店（SH02）拖累。带动门店还有：上海徐汇店（SH01）环比 -19.8%。"
+
+
+def test_driver_short_names_and_parentheses_are_recognized():
+    from mini_employee.render import _label_drivers
+    drivers = [{"store": "上海徐汇店", "label": "上海徐汇店（SH01）", "wow": -0.198},
+               {"store": "上海静安店", "label": "上海静安店（SH02）", "wow": -0.177},
+               {"store": "南京新街口店", "label": "南京新街口店（NJ01）", "wow": -0.148}]
+    item = {"phenomenon": "徐汇 -19.8%、南京新街口 -14.8% 同向下滑。", "cause": "", "suggestion": ""}
+    _label_drivers(item, drivers)
+    assert item["phenomenon"] == "徐汇（SH01） -19.8%、南京新街口（NJ01） -14.8% 同向下滑。带动门店还有：上海静安店（SH02）环比 -17.7%。"
+    item = {"phenomenon": "主要受上海徐汇店（环比下降 19.8%）拖累", "cause": "", "suggestion": ""}
+    _label_drivers(item, drivers[:1])
+    assert item["phenomenon"] == "主要受上海徐汇店（SH01，环比下降 19.8%）拖累"
+
+
+def test_duplicate_unit_after_placeholder_removed():
+    from mini_employee.placeholders import resolve
+    flat = {"region.华南.sales": 203120.0, "region.华南.share": 0.321, "region.华南.gross_margin_chg": -0.099}
+    text, _ = resolve("实收升至 {{region.华南.sales}} 元，占比 {{region.华南.share}}%，"
+                      "下降 {{region.华南.gross_margin_chg|abs}}个百分点", flat)
+    assert text == "实收升至 203,120 元，占比 32.1%，下降 9.9 个百分点"

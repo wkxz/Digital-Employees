@@ -36,8 +36,19 @@ def anomaly_flat(kpis: dict[str, Any]) -> dict[str, Any]:
     return flat
 
 
+def _store_names(name: str) -> list[str]:
+    """门店的几种写法，从长到短：全称、去掉“店”、再去掉城市前缀（上海徐汇店 → 上海徐汇 → 徐汇）。"""
+    out = [name]
+    if name.endswith("店") and len(name) > 2:
+        out.append(name[:-1])
+        if len(name) > 4:
+            out.append(name[2:-1])
+    return out
+
+
 def _label_drivers(item: dict, drivers: list[dict]) -> None:
-    """带动门店第一次出现时补上门店编码（如“上海静安店（SH02）”）：模型按占位符写门店名，常常不带编码。
+    """带动门店第一次出现时补上门店编码（如“上海静安店（SH02）”）：模型按占位符写门店名，常常不带编码，
+    也会写简称（“徐汇 -19.8%”）或自带括号（“上海静安店（环比下降 17.9%）”，此时编码并入括号）。
     模型漏写的带动门店（常见于压缩篇幅时）由程序补在“现象”末尾，保证超阈值门店逐一列出。"""
     fields = ("phenomenon", "cause", "suggestion")
     missing = []
@@ -45,12 +56,23 @@ def _label_drivers(item: dict, drivers: list[dict]) -> None:
         name, label = d.get("store"), d.get("label") or d.get("store")
         if not name or any(label in item[k] for k in fields):
             continue
-        for k in fields:
-            new, n = re.subn(re.escape(name) + r"(?![（(])", label, item[k], count=1)
-            if n:
-                item[k] = new
+        code = label[len(name) + 1:-1] if label.startswith(name + "（") else ""
+        done = False
+        for alias in _store_names(name):
+            for k in fields:
+                m = re.search(re.escape(alias) + r"(?!店)([（(])?", item[k])
+                if not m:
+                    continue
+                if code:
+                    if m.group(1):  # 已有括号：编码并入
+                        item[k] = item[k][:m.end()] + code + "，" + item[k][m.end():]
+                    else:
+                        item[k] = item[k][:m.end()] + f"（{code}）" + item[k][m.end():]
+                done = True
                 break
-        else:
+            if done:
+                break
+        if not done:
             missing.append(f"{label}环比 {_pct(d.get('wow'))}")
     if missing:
         p = item["phenomenon"].rstrip()
@@ -529,8 +551,8 @@ def write_html(blocks: list[Block], path: Path) -> None:
 
 
 LINE = 1.78  # 行高 / 字号：按 Word 中微软雅黑单倍行距实测（10.5 磅字行距约 18 磅），页数估算与 Word 一致
-SAFETY = 0.0   # 英寸：每页底部额外预留。按 31 份报告（真实模型 24 份、Mock 7 份）与 Word 实际页数对比，
-               # 估算本身已略偏高（多 0～1.3 英寸），不再额外预留时全部一致；预留 0.25 以上会把 3 页误判为 4 页
+SAFETY = 0.15  # 英寸：每页底部额外预留。按 46 份报告（deepseek / gemini 真实模型 39 份、Mock 7 份）与 Word 实际页数对比：
+               # 不预留时有 1 份把 4 页估成 3 页（Word 把最后一段挤到下一页）；预留 0.1～0.2 时无估少、1 份估多；0.25 以上估多增加
 
 
 class _PdfLayout:

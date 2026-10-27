@@ -64,4 +64,9 @@ def resolve(text: str, flat: dict[str, Any]) -> tuple[str, list[str]]:
             return m.group(0)
         return fmt_value(k, flat[k], absolute=bool(m.group(2)))
 
-    return PH_RE.sub(sub, text), missing
+    out = PH_RE.sub(sub, text)
+    out = DUP_UNIT.sub(r"\1", out)  # 占位符已带单位，模型又写了一次（“203,120 元 元”）
+    return out, missing
+
+
+DUP_UNIT = re.compile(r"(\d[\d,.]* (?:元|个百分点)|\d[\d,.]*%)\s*(?:元|个百分点|%)(?![一-龥])")
