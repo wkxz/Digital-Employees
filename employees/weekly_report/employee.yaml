@@ -151,7 +151,7 @@ quality_checks:
 # ---------------------------------------------------------------- 上限（理由见技术报告 / README）
 limits:
   max_model_turns_per_step: 8
-  max_step_seconds: 180          # 实测单次调用中位 23s、最长 57s，单步 1–2 轮；留出 3 轮余量
+  max_step_seconds: 180          # 实测单次调用中位 8s（deepseek-flash）/ 23s（gemini），最长 57s，单步 1–2 轮；留出 3 轮余量
   max_task_seconds: 600
   tool_max_retries: 3
   tool_backoff_seconds: [1, 2, 4]

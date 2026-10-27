@@ -93,6 +93,10 @@ def _check(o, tid: str, exp: dict[str, Any]) -> None:
             errs.append(f"异常应为 {exp['anomaly_labels']}，实际 {[a['label'] for a in k['anomalies']]}")
     if "state_path" in exp:
         path = [e["payload"]["to"] for e in o.store.events(tid, ["state_changed"])]
+        if not is_mock():  # 真实模型允许经自动修正后通过：去掉“自动修正 → 质检”的往返再比较
+            while any(path[i:i + 2] == ["AUTO_FIXING", "QC"] for i in range(len(path))):
+                i = next(i for i in range(len(path)) if path[i:i + 2] == ["AUTO_FIXING", "QC"])
+                del path[i:i + 2]
         if path != exp["state_path"]:
             errs.append(f"状态路径应为 {exp['state_path']}，实际 {path}")
     if exp.get("qc_all_blocking_passed"):
