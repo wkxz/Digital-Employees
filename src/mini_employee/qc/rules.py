@@ -114,8 +114,8 @@ def structure(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
 UP_WORDS = ["增长", "上涨", "上升", "提升", "回升", "走高", "增加", "攀升"]
 DOWN_WORDS = ["下降", "下滑", "下跌", "减少", "回落", "走低", "萎缩", "降低"]
 NUM_RE = re.compile(r"[+\-−]?\d+(?:[.,]\d+)*\s*(?:%|％|万元|万|元|件|单|笔)")
-SIGNED_AFTER_WORD = re.compile(r"(增长|下降|下滑|下跌|上涨|上升|提升|回升|回落|减少|增加|降低|升至|降至|提高)(了)?\s*"
-                               r"\{\{\s*([^{}\s|]+)\s*\}\}")
+SIGNED_AFTER_WORD = re.compile(r"(增长|下降|下滑|下跌|上涨|上升|提升|回升|回落|减少|增加|降低|升至|降至|提高|拉低|拉高|拖累)"
+                               r"([^，,；;。！？{}\n]{0,12}?)\s*\{\{\s*([^{}\s|]+)\s*\}\}")  # 允许中间隔几个字，如“拉低华东区实收 {{…}}”
 
 
 @rule("data_consistency", "数据一致性")
@@ -242,7 +242,7 @@ def page_limit(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
     chars = sum(len(PH_RE.sub("0000", t)) for _, _, _, t in _iter_raw(ctx))
     target = int(chars * n / ctx.pages * 0.85) // 50 * 50  # 表格、图表篇幅固定，只能压缩文字
     return False, [{"type": "pages", "chars": chars, "target_chars": target,
-                    "msg": f"正文约 {ctx.pages} 页，超过 {n} 页；模型撰写的文字约 {chars} 字，请压缩到 {target} 字以内"}],         "表格里已有的数字不要在文字中逐项复述，每条只保留结论和原因"
+                    "msg": f"正文约 {ctx.pages} 页，超过 {n} 页；模型撰写的文字约 {chars} 字，请压缩到 {target} 字以内"}],         "表格里已有的数字不要在文字中逐项复述，每条只保留结论和原因；异常条目中的带动门店名字全部保留（可只写店名和环比），主要压缩原因和建议"
 
 
 # ---------------------------------------------------------------- 超阈值对象逐一列出

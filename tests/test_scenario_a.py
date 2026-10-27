@@ -117,3 +117,29 @@ def test_page_estimate_counts_overflow():
     blocks = [("title", "经营周报"), ("h2", "一、本周摘要")] + [("p", "中文段落内容" * 30)] * 30
     assert count_pages(blocks) >= 3
     assert count_pages([("title", "经营周报"), ("p", "一句话")]) == 1
+
+
+def test_driver_store_codes_added_on_first_mention():
+    from mini_employee.render import _label_drivers
+    item = {"phenomenon": "上海静安店环比下降 17.9%，杭州湖滨店（HZ01）环比下降 38.3%。", "cause": "上海静安店对面竞品开业。",
+            "suggestion": ""}
+    _label_drivers(item, [{"store": "上海静安店", "label": "上海静安店（SH02）"},
+                          {"store": "杭州湖滨店", "label": "杭州湖滨店（HZ01）"}])
+    assert item["phenomenon"] == "上海静安店（SH02）环比下降 17.9%，杭州湖滨店（HZ01）环比下降 38.3%。"
+    assert item["cause"] == "上海静安店对面竞品开业。"  # 只补第一次出现
+
+
+def test_signed_value_after_word_with_gap():
+    from mini_employee.qc.rules import SIGNED_AFTER_WORD
+    m = SIGNED_AFTER_WORD.search("两店合计拉低华东区本周实收 {{anomaly.A1.impact}}")
+    assert m and m.group(3) == "anomaly.A1.impact"
+    assert not SIGNED_AFTER_WORD.search("环比下降，变动 {{anomaly.A1.impact}}")
+    assert not SIGNED_AFTER_WORD.search("环比下降 {{store.a.sales_wow|abs}}")
+
+
+def test_missing_driver_stores_appended_by_program():
+    from mini_employee.render import _label_drivers
+    item = {"phenomenon": "华东五店同步下滑，主要受上海静安店拖累", "cause": "节后客流回落。", "suggestion": ""}
+    _label_drivers(item, [{"store": "上海静安店", "label": "上海静安店（SH02）", "wow": -0.177},
+                          {"store": "上海徐汇店", "label": "上海徐汇店（SH01）", "wow": -0.198}])
+    assert item["phenomenon"] == "华东五店同步下滑，主要受上海静安店（SH02）拖累。带动门店还有：上海徐汇店（SH01）环比 -19.8%。"

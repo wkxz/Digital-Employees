@@ -36,6 +36,27 @@ def anomaly_flat(kpis: dict[str, Any]) -> dict[str, Any]:
     return flat
 
 
+def _label_drivers(item: dict, drivers: list[dict]) -> None:
+    """带动门店第一次出现时补上门店编码（如“上海静安店（SH02）”）：模型按占位符写门店名，常常不带编码。
+    模型漏写的带动门店（常见于压缩篇幅时）由程序补在“现象”末尾，保证超阈值门店逐一列出。"""
+    fields = ("phenomenon", "cause", "suggestion")
+    missing = []
+    for d in drivers:
+        name, label = d.get("store"), d.get("label") or d.get("store")
+        if not name or any(label in item[k] for k in fields):
+            continue
+        for k in fields:
+            new, n = re.subn(re.escape(name) + r"(?![（(])", label, item[k], count=1)
+            if n:
+                item[k] = new
+                break
+        else:
+            missing.append(f"{label}环比 {_pct(d.get('wow'))}")
+    if missing:
+        p = item["phenomenon"].rstrip()
+        item["phenomenon"] = (p + ("" if not p or p[-1] in "。；！" else "。")) + f"带动门店还有：{'、'.join(missing)}。"
+
+
 def _pct(v: float | None) -> str:
     return fmt_value("x_wow", v)
 
@@ -169,6 +190,7 @@ def build_blocks(content: dict[str, Any], kpis: dict[str, Any], charts: dict[str
                 item = {"head": head, "phenomenon": r(it.get("phenomenon", "")),
                         "cause": r(it.get("cause", "")) + basis, "suggestion": r(it.get("suggestion", "")),
                         "checks": checks.get(it.get("id"), [])}
+                _label_drivers(item, a.get("drivers") or [])
                 texts[sid].extend([item["head"], item["phenomenon"], item["cause"], item["suggestion"], *item["checks"]])
                 blocks.append(("anomaly", item))
             for n in reconcile_extra(content, kpis, minutes or []):  # 非异常对象的口头说法与数据不一致
@@ -507,7 +529,8 @@ def write_html(blocks: list[Block], path: Path) -> None:
 
 
 LINE = 1.78  # 行高 / 字号：按 Word 中微软雅黑单倍行距实测（10.5 磅字行距约 18 磅），页数估算与 Word 一致
-SAFETY = 0.5   # 英寸：Word 换页时段落不拆到页尾、表格整行下移，每页底部常空出几行，估算时预留
+SAFETY = 0.0   # 英寸：每页底部额外预留。按 31 份报告（真实模型 24 份、Mock 7 份）与 Word 实际页数对比，
+               # 估算本身已略偏高（多 0～1.3 英寸），不再额外预留时全部一致；预留 0.25 以上会把 3 页误判为 4 页
 
 
 class _PdfLayout:
