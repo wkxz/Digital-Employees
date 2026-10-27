@@ -1,0 +1,10 @@
+id: A03
+name: 官方 A-03 缺销售数据 → 暂停待补 → 补充后从暂停处继续
+category: 缺材料
+input:
+  period: 2026-W44
+  files: {minutes_file: data/official_a/周会纪要_2026W44.docx}
+steps:
+  - expect: {state: WAITING_INPUT, pause_contains: 缺少材料：销售明细}
+  - supplement: {files: {sales_file: data/official_a/销售明细.xlsx}}
+  - expect: {state: PENDING_REVIEW, report_contains: ["573,635 元"]}

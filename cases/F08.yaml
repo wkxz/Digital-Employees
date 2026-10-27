@@ -3,6 +3,7 @@ name: Mock 模型检索纪要时检索服务不可用 → 暂停 → 恢复后�
 category: 故障
 mock_only: true   # 真实模型已直接拿到纪要全文，通常不调用检索工具
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
   faults: [{tool: search_minutes, mode: error}]

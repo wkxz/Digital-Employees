@@ -308,7 +308,13 @@ class Orchestrator:
                 msg = "周会纪要包含个人隐私信息（手机号 / 身份证号），按规定不能处理，请脱敏后重新发起任务"
                 self.store.transition(tid, "admission_invalid", SYSTEM, {"reason": msg}, pause_reason=msg)
                 return
-            passed.append(f"周会纪要已检查通过（{minutes['count']} 条）")
+            mw = (minutes.get("meta") or {}).get("week")
+            my = (minutes.get("meta") or {}).get("year")
+            if mw and (mw != week.week or (my and my != week.year)):
+                problems.append(f"上传的周会纪要是{f'{my} 年' if my else ''}第 {mw} 周的（{minutes['meta']['title']}），"
+                                f"与统计周期 {week.key} 不一致，请上传第 {week.week} 周的周会纪要")
+            else:
+                passed.append(f"周会纪要已检查通过（{minutes['count']} 条）")
         if problems:
             msg = "；".join(problems) + "。" + ("".join(f"{x}。" for x in passed) if passed else "")
             self._pause(tid, "admission_missing", msg + "补充后将继续执行。", resume_to=S.RUNNING, missing=missing)
@@ -508,7 +514,8 @@ class Orchestrator:
         ctx = QCContext(content=read_json(d / art["content_path"]), texts=texts["sections"],
                         unresolved=texts["unresolved"], images=texts["images"], tables=texts["tables"], kpis=kpis,
                         flat=anomaly_flat(kpis), minutes=read_json(d / "work" / "minutes.json"),
-                        sections=emp.report["sections"], todos=fb["todos"] if fb else [], prev_content=prev)
+                        sections=emp.report["sections"], todos=fb["todos"] if fb else [], prev_content=prev,
+                        pages=texts.get("pages"))
         return ctx, specs
 
     def _on_qc(self, task: dict, resumed: bool) -> None:
@@ -572,7 +579,7 @@ class Orchestrator:
                         system=emp.skill("岗位职责", "撰写周报", "注意事项") +
                         "\n\n## 质检修正\n根据 failures 中列出的问题修改 content，只改有问题的句子，其余保持不变，输出完整的 content。",
                         payload={"content": content, "failures": remaining, "overview": overview(kpis),
-                                 "placeholders": placeholder_table(kpis), "placeholders_help": PLACEHOLDER_HELP},
+                                           "placeholders": placeholder_table(kpis), "placeholders_help": PLACEHOLDER_HELP},
                         tools=["query_kpi"], output_schema=output_schema("fix", emp.report),
                         max_turns=emp.limits["max_model_turns_per_step"], max_seconds=emp.limits["max_step_seconds"])
                 except (StepLimitExceeded, LLMUnavailable, ToolFailure, MissingInput) as e:

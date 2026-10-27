@@ -1,0 +1,36 @@
+id: A04
+name: 官方 A-04 数据缺失与退货
+category: 边界
+input:
+  period: 2026-W42
+  files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/official_a/周会纪要_2026W42.docx}
+steps:
+  - expect:
+      state: PENDING_REVIEW
+      kpis:
+        total.sales: 605908.99
+        total.sales_wow: -0.116764
+        total.gross_margin: 0.610497
+        total.delivery_share: 0.315274
+        region.华东.sales_wow: -0.158167
+        region.华东.target_rate: 0.982754
+        region.华南.target_rate: 0.88902
+        region.华北.target_rate: 0.985837
+        region.西南.target_rate: 0.928184
+      report_contains:
+        - 605,909 元
+        - "-11.7%"
+        - 61.0%
+        - 31.5%
+        - 广州海珠店 10/14 无系统销售数据
+        - 收银系统故障
+        - 手工台账实收约 5,100 元未经系统核实，未计入实收合计
+        - 本周退货 15 笔，合计 -656 元
+        - 北京朝阳店 10/15 草莓奶油切块退货 15 份（-330 元）
+        - 第 42 周周会纪要
+        - 北京海淀店（BJ02）
+        - 深圳福田店（SZ02）
+        - 成都高新店（CD02）
+        - 成都春熙路店（CD01）
+      report_not_contains: [客单价, 同比, "{{", "611,009"]
+      # 异常门店多、正文偏长时，篇幅质检会触发一次自动压缩，送审前须通过

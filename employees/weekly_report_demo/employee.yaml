@@ -1,0 +1,167 @@
+# 经营周报员工（演示数据：明细自带区域、品类列的零售样例）—— 结构配置。做法（岗位职责、写作要求、注意事项）在 SKILL.md。
+# 业务人员改本文件即可调整：表单字段、准入规则、步骤、开放的工具、质检规则、上限、报告章节与交付格式。
+id: weekly_report_demo
+name: 经营周报员工（演示数据）
+description: 读取门店销售明细与周会纪要，汇总分析、找出异常波动及原因，生成带图表和结论的经营周报（Word）。
+skill: SKILL.md
+
+model:
+  provider: mock            # mock | deepseek | qwen | glm（也可用环境变量 MINI_MODEL 覆盖）
+  temperature: 0.2
+
+# ---------------------------------------------------------------- 任务发起表单（加字段只改这里）
+form:
+  - {key: period, label: 统计周期, type: iso_week, required: true, help: "如 2026-W44 或 2026年第44周"}
+  - {key: sales_file, label: 销售明细, type: file, ext: [xlsx, csv], required: true, multiple: true}  # 可分多份上传，补充材料时追加
+  - {key: minutes_file, label: 周会纪要, type: file, ext: [docx, md], required: true}
+  - {key: focus_region, label: 重点关注区域, type: enum, options: [华东, 华南, 华北, 西南], required: false}
+  # 现场变更示例（纯配置加字段）：type 可选 string / enum；字段会出现在发起页，并连同 guide 一起交给模型。
+  #   写了 section：模型须在该章节体现，程序自动加一条质检核对该章节确实提到了填写的值。
+  #   只想显示在报告上：在下面 report.title / report.footer 里写 {字段key}。
+  #   新字段建议 required: false，否则未带该字段的现有自测用例会被拒绝。
+  # - {key: focus_category, label: 重点关注品类, type: enum, options: [生鲜, 饮料, 零食, 日化, 粮油], required: false,
+  #    guide: "在“品类表现”中单独写一句该品类的销售额、占比和环比", section: categories}
+  # - {key: recipient, label: 报告接收人, type: string, required: false}
+
+# ---------------------------------------------------------------- 准入校验
+admission:
+  required_columns: [日期, 门店, 区域, 品类, 销售额, 销量]
+  column_aliases:           # 企业数据列名不同时在这里加别名，不改代码
+    日期: [销售日期, 交易日期, date]
+    门店: [门店名称, 店铺, 店名, store]
+    区域: [大区, 片区, region]
+    品类: [类别, 品类名称, category]
+    销售额: [实收金额, 金额, 销售金额, 营业额, sales]   # 实收 = 原价 − 折扣，退货为负数
+    销量: [数量, 件数, 销售数量, qty]
+    订单数: [单数, 客流, 交易笔数, orders]
+    成本: [成本金额]
+    渠道: [销售渠道]
+    商品: [商品名称, 单品]
+    记录ID: [记录编号, 流水号]
+  require_previous_week: true   # 需要上一周数据才能算环比
+  max_bad_row_ratio: 0.05       # 重复/空值/负数行超过 5% 则暂停，请发起人核对数据
+  pii_policy: reject            # reject：含个人隐私直接拒绝；redact：脱敏后继续
+
+# ---------------------------------------------------------------- 分析口径
+analysis:
+  anomaly_threshold: 0.15       # 环比超过 ±15% 视为异常
+  top_n: 5                      # 最多列出 5 条异常（按影响金额排序）
+  min_base_sales: 20000         # 上周销售额低于该值的对象不判异常，避免小基数误报
+  dimensions: [region, store, category, rc]
+
+# ---------------------------------------------------------------- 工具（员工可用的全部工具；模型每步只看到该步开放的子集）
+tools: [read_sales_data, compute_kpis, read_minutes, search_minutes, query_kpi, render_charts, generate_report]
+
+# ---------------------------------------------------------------- 工作步骤
+# type=tool：程序直接调用工具；type=agent：交给模型，只开放 tools 中列出的工具
+# per_version=true 的步骤在退回返工后按新版本重做；rerun_on 指定哪些章节的审核意见会触发重做（* 表示任何意见）
+steps:
+  - id: load
+    name: 读取销售明细
+    type: tool
+    tool: read_sales_data
+    args:
+      file_paths: $form.sales_file
+      period: $form.period
+      required_columns: $admission.required_columns
+      column_aliases: $admission.column_aliases
+      max_bad_ratio: $admission.max_bad_row_ratio
+  - id: kpi
+    name: 计算指标与识别异常
+    type: tool
+    tool: compute_kpis
+    args:
+      period: $form.period
+      anomaly_threshold: $analysis.anomaly_threshold
+      top_n: $analysis.top_n
+      min_base_sales: $analysis.min_base_sales
+      dimensions: $analysis.dimensions
+  - id: minutes
+    name: 读取周会纪要
+    type: tool
+    tool: read_minutes
+    args: {file_path: $form.minutes_file}
+  - id: charts
+    name: 生成图表
+    type: tool
+    tool: render_charts
+    args: {charts: [daily_trend, region_wow, category_wow]}
+  - id: analysis
+    name: 异常原因分析
+    type: agent
+    purpose: analysis
+    skill_sections: [岗位职责, 异常分析, 注意事项]
+    tools: [search_minutes, query_kpi]
+    per_version: true
+    rerun_on: [anomalies]
+  - id: draft
+    name: 撰写周报
+    type: agent
+    purpose: draft
+    skill_sections: [岗位职责, 撰写周报, 注意事项]
+    tools: [query_kpi]
+    per_version: true
+    rerun_on: ["*"]
+  - id: render
+    name: 生成交付文件
+    type: render
+    tool: generate_report
+    per_version: true
+    rerun_on: ["*"]
+
+# ---------------------------------------------------------------- 自动质检（blocking 不通过不能送审；warning 只记录）
+quality_checks:
+  - rule: structure
+    params: {min_charts: 2, required_tables: [核心指标, 区域销售]}
+  - rule: data_consistency
+  - rule: cause_evidence
+    params: {pending_word: 待确认}
+  - rule: sensitive_words
+    params: {words: [内部绝密, 傻, 垃圾]}
+  - rule: minutes_vs_data        # 纪要口头说法与交易数据不一致时，报告正文必须有“数据核对”说明
+  - rule: length
+    severity: warning
+    params: {summary_max_chars: 400, summary_max_items: 5, total_min_chars: 500, total_max_chars: 4000}
+  # 现场变更示例（纯配置新增规则）：
+  # - rule: keyword_required
+  #   params: {section: overall, keywords: [客单价]}
+
+# ---------------------------------------------------------------- 上限（理由见技术报告 / README）
+limits:
+  max_model_turns_per_step: 8
+  max_step_seconds: 180          # 实测单次调用中位 23s、最长 57s，单步 1–2 轮；留出 3 轮余量
+  max_task_seconds: 600
+  tool_max_retries: 3
+  tool_backoff_seconds: [1, 2, 4]
+  tool_timeout_seconds: 30
+  qc_max_fix_rounds: 2
+  rework_max_rounds: 3
+
+# ---------------------------------------------------------------- 审核意见解析（程序规则，把意见拆成可校验的待办）
+feedback:
+  section_aliases:
+    summary: [摘要, 结论, 概述]
+    overall: [整体, 总体, 大盘, 客单价]
+    regions: [区域表现, 门店, 区域情况]
+    categories: [品类]
+    anomalies: [原因, 异常, 波动, 下滑, 上涨, 归因]
+    next_week: [建议, 下周, 计划, 措施]
+  metric_keywords: {客单价: atv, 销量: qty, 订单: orders}
+
+# ---------------------------------------------------------------- 交付物
+report:
+  title: "经营周报 · {period_label}"
+  filename: "经营周报_{period_compact}"
+  output_formats: [docx]          # 可选 docx / md / html / pdf，第一个是审核用的主文件（建议保持 docx 在首位）
+  footer: "本报告由迷你数字员工生成，数字由程序计算，经人工审核后交付。"   # 可引用表单字段，如 "报送：{recipient}。"
+  # 章节：kind 为 paragraphs / bullets 的由模型撰写，guide 是写给模型的本章要求。
+  # 现场变更示例（纯配置加章节）：在 appendix 前插入
+  #   - {id: risks, title: 七、风险提示, kind: bullets, guide: "列出下周可能影响销售的风险，每条一句"}
+  sections:
+    - {id: summary, title: 一、本周摘要, kind: bullets}
+    - {id: overall, title: 二、整体经营, kind: paragraphs, tables: [kpi_overall], charts: [daily_trend]}
+    - {id: regions, title: 三、区域与门店表现, kind: paragraphs, tables: [region_table, store_rank], charts: [region_wow]}
+    - {id: categories, title: 四、品类表现, kind: paragraphs, tables: [category_table], charts: [category_wow]}
+    - {id: anomalies, title: 五、异常与原因, kind: anomalies}
+    - {id: next_week, title: 六、下周关注与建议, kind: bullets}
+    - {id: appendix, title: 附录：数据口径与来源, kind: appendix}

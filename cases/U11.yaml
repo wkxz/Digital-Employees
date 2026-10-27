@@ -3,6 +3,7 @@ name: 用户用例：纪要称“华北区销售额暴跌50%”，交易数据�
 category: 正常
 # 基准值已用销售明细独立核算（2026-10-24），与 case_01 的交易数据一致
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files:
     sales_file: data/user_cases/case_08_discrepancy_fact/销售明细_2026W44.xlsx
@@ -21,7 +22,7 @@ steps:
       report_contains:
         - 数据核对
         - 华北区本周销售额暴跌50%
-        - 华北区销售额环比为 -3.11%，与会上口径不一致
+        - 华北区销售额环比为 -3.1%，与会上口径不一致
         - 海贝思
       report_not_contains: ["【华东战区情况】", "【口头汇报矛盾陷阱】", "{{"]
       qc_all_blocking_passed: true

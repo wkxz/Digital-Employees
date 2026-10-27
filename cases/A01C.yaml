@@ -1,0 +1,58 @@
+id: A01C
+name: 官方 A-01 只上传 CSV 明细（区域、品类、目标取自员工配置自带的主数据）
+category: 正常
+# 判定要点见 data/official_a/公开样例用例.md；数字已用销售明细独立复算
+input:
+  period: 2026-W44
+  files: {sales_file: data/official_a/销售明细.csv, minutes_file: data/official_a/周会纪要_2026W44.docx}
+steps:
+  - expect:
+      state: PENDING_REVIEW
+      kpis:
+        total.sales: 573634.87
+        total.sales_wow: -0.093047
+        total.gross_margin: 0.610841
+        total.delivery_share: 0.318379
+        region.华东.sales: 197617.93
+        region.华东.sales_wow: -0.119806
+        region.华东.target_rate: 0.840927
+        region.华南.sales_wow: -0.127085
+        region.华南.target_rate: 0.923471
+        region.华北.target_rate: 0.920862
+        region.西南.target_rate: 0.963395
+        store.杭州湖滨店.sales_wow: -0.383187
+        store.上海静安店.sales_wow: -0.179367
+        store.深圳南山店.sales_wow: -0.153232
+        store.深圳福田店.sales_wow: -0.172533
+      anomaly_labels: [华东区, 华南区]
+      report_contains:
+        - 573,635 元
+        - "-9.3%"
+        - 61.1%
+        - 31.8%
+        - 84.1%
+        - 92.3%
+        - 92.1%
+        - 96.3%
+        - 杭州湖滨店（HZ01）
+        - 上海静安店（SH02）
+        - 深圳南山店（SZ01）
+        - 深圳福田店（SZ02）
+        - 第 44 周周会纪要
+        - 消防改造
+        - 竞品
+        - 第二杯半价
+        - 基本持平
+        - 华南区销售额环比为 -12.7%，与会上口径不一致
+        - 拿铁
+        - 生椰拿铁
+        - 美式咖啡
+        - 6寸生日蛋糕
+        - 草莓奶油切块
+        - 本周退货 11 笔，合计 -260 元
+        - 杭州湖滨店 10/27–10/29 无销售数据
+        - 属正常停业，不是数据缺失
+      report_not_contains: [客单价, 同比, "{{"]
+      qc_all_blocking_passed: true
+  - review: {decision: approve}
+  - expect: {state: DELIVERED, deliverable_files: [经营周报_2026W44.docx]}

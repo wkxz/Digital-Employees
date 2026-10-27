@@ -69,7 +69,7 @@ def test_replacement_only_touches_the_flagged_clause(kpis):
 # ---------------------------------------------------------------- 3. 修正超限后重试 / 人工修改能真正生效
 
 def _exhausted(orch, sample_files):
-    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files,
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files,
                       {"faults": [{"tool": "mock", "mode": "direction_error"}, {"tool": "mock", "mode": "stubborn"}]})
     assert orch.drive(tid) == S.SUSPENDED
     return tid
@@ -125,7 +125,7 @@ def test_incomplete_previous_week_is_missing_input():
 def test_same_name_corrected_file_is_kept(tmp_path):
     from mini_employee.config import load_employee
     from mini_employee.tools import data as D
-    adm = load_employee("weekly_report").admission
+    adm = load_employee("weekly_report_demo").admission
     cur = ROOT_DATA / "fixtures" / "销售明细_仅本周.xlsx"
     prev = next((ROOT_DATA / "user_cases" / "case_02_missing_last_week").glob("补充_*.xlsx"))
     names = []
@@ -140,7 +140,7 @@ def test_same_name_corrected_file_is_kept(tmp_path):
 # ---------------------------------------------------------------- 6. 中断窗口
 
 def test_feedback_is_saved_before_entering_rework(orch, sample_files, monkeypatch):
-    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files)
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files)
     orch.drive(tid)
     seen = {}
     real = orch.store.transition
@@ -156,7 +156,7 @@ def test_feedback_is_saved_before_entering_rework(orch, sample_files, monkeypatc
 
 
 def test_incomplete_deliverable_is_rebuilt_on_resume(orch, sample_files):
-    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files)
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files)
     orch.drive(tid)
     orch.review(tid, "approve", reviewed_sha256=orch.store.get(tid)["artifact"]["sha256"])
     manifest = orch.task_dir(tid) / "deliverable" / "manifest.json"
@@ -169,7 +169,7 @@ def test_incomplete_deliverable_is_rebuilt_on_resume(orch, sample_files):
 
 def test_qc_pass_gate_reads_the_qc_record_not_the_flag(orch, sample_files):
     from mini_employee.store import IllegalTransition
-    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files)
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files)
     orch.drive(tid)
     t = orch.store.get(tid)
     orch.store.update(tid, state=S.QC, artifact={**t["artifact"], "sha256": "被替换过的产物"})
@@ -180,7 +180,7 @@ def test_qc_pass_gate_reads_the_qc_record_not_the_flag(orch, sample_files):
 def test_approve_gate_rejects_when_last_qc_round_failed(orch, sample_files):
     from mini_employee.fsutil import read_json, write_json
     from mini_employee.store import IllegalTransition
-    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files)
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files)
     orch.drive(tid)
     path = orch.task_dir(tid) / "qc" / "qc_report.json"
     data = read_json(path)
@@ -194,7 +194,7 @@ def test_approve_gate_rejects_when_last_qc_round_failed(orch, sample_files):
 # ---------------------------------------------------------------- 8. 状态与事件同一事务
 
 def test_state_and_event_are_written_atomically(orch, sample_files, monkeypatch):
-    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files)
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files)
     real = orch.store.event
 
     def boom(tid_, type_, *a, **kw):
@@ -231,11 +231,11 @@ def test_filename_may_reference_an_unfilled_optional_field(tmp_path, monkeypatch
     base = tmp_path / "employees"
     shutil.copytree(Path(__file__).resolve().parents[1] / "employees", base)
     monkeypatch.setattr(C, "EMPLOYEES_DIR", base)
-    path = base / "weekly_report" / "employee.yaml"
+    path = base / "weekly_report_demo" / "employee.yaml"
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     raw["report"]["filename"] = "经营周报_{period_compact}{focus_region}"
     path.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files)  # 未填 focus_region
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files)  # 未填 focus_region
     assert orch.drive(tid) == S.PENDING_REVIEW
     assert orch.store.get(tid)["artifact"]["primary"].endswith("经营周报_2026W44.docx")
 
@@ -248,7 +248,7 @@ def _redact_employee(tmp_path, monkeypatch):
     base = tmp_path / "employees"
     shutil.copytree(Path(__file__).resolve().parents[1] / "employees", base)
     monkeypatch.setattr(C, "EMPLOYEES_DIR", base)
-    path = base / "weekly_report" / "employee.yaml"
+    path = base / "weekly_report_demo" / "employee.yaml"
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     raw["admission"]["pii_policy"] = "redact"
     path.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -261,7 +261,7 @@ def test_redact_policy_drops_pii_columns_and_masks_minutes(tmp_path, monkeypatch
     minutes = tmp_path / "周会纪要.md"
     minutes.write_text("# 周会纪要\n\n华东区店长电话 13812345678，客流下降。\n\n华南区生鲜表现良好。\n", encoding="utf-8")
     d = ROOT_DATA / "user_cases" / "case_07_privacy_leak"
-    tid = orch.create("weekly_report", {"period": "2026-W44"},
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44"},
                       {"sales_file": str(d / "销售明细_含隐私信息.xlsx"), "minutes_file": str(minutes)})
     assert orch.drive(tid) == S.PENDING_REVIEW
     clean = (orch.task_dir(tid) / "work" / "sales_clean.csv").read_text(encoding="utf-8")
@@ -299,6 +299,6 @@ def test_extra_notes_attribute_claims_to_the_right_object(kpis):
                 "text": f"{r['name']}区本周销售额环比{'下降' if wow < 0 else '增长'}{abs(wow):.1f}%。"}]
     notes = extra_notes({"anomalies": []}, kpis, minutes)
     assert len(notes) == 1 and notes[0]["minutes_no"] == 1, "只有不一致的说法才写核对说明"
-    assert f"{r['name']}区销售额环比为 {wow:+.2f}%" in notes[0]["text"]
+    assert f"{r['name']}区销售额环比为 {wow:+.1f}%" in notes[0]["text"]
     # 说不清是哪个对象的说法不核对，避免张冠李戴
     assert extra_notes({"anomalies": []}, kpis, [{**minutes[0], "text": "部分门店销售额暴跌50%。"}]) == []

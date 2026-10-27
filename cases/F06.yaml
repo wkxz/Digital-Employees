@@ -2,6 +2,7 @@ id: F06
 name: 准入阶段读取纪要的服务不可用 → 暂停 → 恢复后继续
 category: 故障
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
   faults: [{tool: read_minutes, mode: timeout}]

@@ -11,20 +11,22 @@
 
 ```bash
 make install        # 安装依赖（需要 uv）
-make test           # 单元测试 + 44 条用例 + 现场变更预演 + 真实模型调用路径测试（共 106 项，全部离线）
+make test           # 单元测试 + 51 条用例 + 现场变更预演 + 真实模型调用路径测试（共 122 项，全部离线）
 make demo           # 命令行跑一条正常任务，停在“待审核”
 make ui             # Web 界面 http://localhost:8501
 ```
 
 不装 make 时：`uv sync`，然后 `uv run mini ...`、`uv run streamlit run app/streamlit_app.py`。
-模拟数据是 2026 年第 44 周，Makefile 已设置 `MINI_TODAY=2026-11-03`；直接调用 `mini` 时也请设置这个环境变量，否则会提示“统计周期尚未结束”。
+官方数据（`data/official_a/`，青禾烘焙 2026-08-31 至 2026-11-01）最后一周是第 44 周。统计周期是否可用按**数据实际覆盖的日期**判断，
+不看系统日期；数据不含该周时暂停并写明“销售数据实际覆盖 X 至 Y”。Makefile 设置的 `MINI_TODAY=2026-11-03` 只影响报告落款日期。
 
 ### 命令行
 
 ```bash
 export MINI_TODAY=2026-11-03
-uv run mini new --period 2026-W44 --file sales_file=data/samples/销售明细_2026W44.xlsx \
-                --file minutes_file=data/samples/周会纪要_2026W44.docx
+uv run mini new --period 2026-W44 --file sales_file=data/official_a/销售明细.xlsx \
+                --file minutes_file=data/official_a/周会纪要_2026W44.docx
+# 只上传 CSV 也可以：区域、品类、销售目标取自 employees/weekly_report/master.xlsx
 uv run mini review <任务ID> --changes "华东区下滑原因没说清楚，请结合周会纪要补充"
 uv run mini review <任务ID> --approve
 uv run mini events <任务ID>             # 回放事件日志
@@ -60,9 +62,11 @@ uv run mini cases           # 用真实模型跑全部用例（7 条依赖 Mock 
 ## 目录
 
 ```
-employees/weekly_report/
-  employee.yaml        员工结构：表单、准入、步骤、开放工具、质检规则、上限、报告章节（业务人员改这里）
-  SKILL.md             员工做法：岗位职责、异常分析、撰写要求、注意事项（Agent Skills 格式）
+employees/weekly_report/       场景 A 经营周报员工（青禾烘焙官方数据与《周报格式要求》）
+  employee.yaml        员工结构：表单、数据结构与主数据关联、准入、步骤、开放工具、质检规则、上限、报告章节（业务人员改这里）
+  SKILL.md             员工做法：岗位职责、口径、异常分析、撰写要求、篇幅、注意事项（Agent Skills 格式）
+  master.xlsx          主数据：门店信息、商品信息、销售目标（上传的 xlsx 中有同名工作表时优先用上传的）
+employees/weekly_report_demo/  旧样例数据结构（明细自带区域、品类）的员工，供 data/samples 与早期用例使用
 src/mini_employee/
   states.py            状态、流转表、闸门条件
   store.py             SQLite：任务表 + 只追加的事件表；唯一的状态变更入口 transition()
@@ -78,8 +82,9 @@ src/mini_employee/
   render.py            占位符替换 + Word / Markdown / HTML / PDF 生成
   runner.py            用例批量运行器
 app/streamlit_app.py   Web 界面：发起任务 / 任务中心 / 审核台 / 事件回放 / 故障注入 / 员工配置
-cases/                 44 条自测用例（YAML），其中 U01–U11 基于用户提供的数据（data/user_cases/）
-data/samples/          主样例数据（模拟）；data/fixtures/ 用例变体数据
+cases/                 51 条自测用例（YAML）：A01–A06 基于官方数据（含公开样例 A-01～A-05）；U01–U11 基于用户提供的数据；其余用旧样例
+data/official_a/       官方数据：销售明细（xlsx 4 个工作表 / csv）、第 42–44 周周会纪要、格式要求、公开样例用例
+data/samples/          旧样例数据（模拟）；data/fixtures/ 用例变体数据
 scripts/make_sample_data.py  模拟数据生成器
 docs/技术报告.md        技术报告草稿
 ```
@@ -128,12 +133,26 @@ docs/技术报告.md        技术报告草稿
 | 新增一类分析维度 | `analysis.dimensions`（region / store / category / rc） |
 | 全新质检逻辑 | `qc/rules.py` 写一个函数并 `@rule` 注册，再在配置中引用 |
 
+## 场景 A 口径（按官方《数据说明》《周报格式要求》）
+
+| 项目 | 做法 |
+|---|---|
+| 数据读取 | xlsx 读“销售明细”工作表；明细只有门店编码、商品编码时按编码关联“门店信息”“商品信息”补齐区域、店型、开业日期、品类；“销售目标”按周次 + 区域取目标 |
+| 去重 | 有记录 ID 时按记录 ID 去重（官方数据 2026-10-21 重复上传 29 条，实收 5,629 元），在数据质量说明中写明 |
+| 退货 | 销量、实收同为负数视为退货，保留并直接冲减实收；数据质量说明写退货笔数、金额和最大一笔 |
+| 指标 | 实收（原价 − 折扣）、环比、毛利率、外卖占比、目标达成率、实收前 5 名单品、区域×品类毛利率变动 ≥ 5 个百分点 |
+| 异常 | 区域、门店实收环比超过 ±10% 全部列出；门店与所在区域同向时作为带动门店合并；同店型同向的独立门店合并为“写字楼店（3 家）” |
+| 缺数 | 开业后无数据的门店日逐一列出，原因从纪要中找：停业写“属正常停业，不是数据缺失”，系统故障时纪要中的手工台账金额不计入实收 |
+| 纪要 | 识别正文样式的“一、二、”章节、“华南（陈某）：”发言、行动项表格（负责人、截止日期）；纪要周次与统计周期不一致时暂停 |
+| 篇幅 | Word 正文不超过 3 页：两张图并排、表格 9 号字；程序按版面估算页数（已用 Word 实际分页校准），超出时自动压缩一轮 |
+| 金额格式 | 元、取整数（573,635 元）；比例 1 位小数；比例的变动写“个百分点” |
+
 ## 待企业确认的问题
 
-1. 周报读者与最关心的 3 个指标；
-2. “异常波动”口径（当前：环比 ±15%，区域 / 门店 / 品类 / 区域×品类）；
-3. 周的定义（当前：ISO 周，周一至周日）；未营业门店算 0 还是排除；
-4. 是否有公司周报模板；
+1. 旧样例数据结构（明细自带区域、品类、无记录 ID）是否继续支持：目前保留在 `weekly_report_demo`，确认后再合并或删除；
+2. 只上传 CSV 时主数据（门店、商品、目标）的来源：目前用员工配置自带的 `master.xlsx`，门店或目标变化时需要更新；
+3. 周的定义（当前：ISO 周，周一至周日）；
+4. 是否有公司周报 Word 模板；
 5. 输入含个人隐私时：直接拒绝（当前）还是脱敏后继续（配置 `pii_policy: redact`：销售明细的隐私列读取时剔除、不落盘，纪要中的手机号 / 身份证号打码后再交给模型，附录写明）；
 6. 上传错误文件类型时：直接拒绝（当前）还是暂停让发起人重新上传。
 

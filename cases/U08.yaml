@@ -3,6 +3,7 @@ name: 用户用例：全周平稳无异常；纪要称“各区域波动均在±
 category: 边界
 # 基准值已用销售明细独立核算（2026-10-24）：区域×品类最大偏离 13.8%（华北日用百货），低于 15% 阈值
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files:
     sales_file: data/user_cases/case_05_flat_no_anomalies/销售明细_2026W44_平稳.xlsx
@@ -24,7 +25,7 @@ steps:
         - 无需特别关注的异常
         - 数据核对
         - 各区域销售波动均在±2%以内
-        - 华北区销售额环比为 -5.51%，超出该范围
+        - 华北区销售额环比为 -5.5%，超出该范围
       report_not_contains: [华东区销售额环比为, "{{"]
       qc_all_blocking_passed: true
   - review: {decision: approve}

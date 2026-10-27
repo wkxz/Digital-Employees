@@ -35,7 +35,7 @@ def test_only_qc_pass_leads_to_review():
 
 def test_illegal_transition_is_rejected_and_logged():
     st = Store()
-    tid = st.create_task("weekly_report", {})
+    tid = st.create_task("weekly_report_demo", {})
     with pytest.raises(IllegalTransition):
         st.transition(tid, "approve", REVIEWER)
     assert st.get(tid)["state"] == S.CREATED
@@ -45,7 +45,7 @@ def test_illegal_transition_is_rejected_and_logged():
 def test_optimistic_lock():
     from mini_employee.store import ConcurrentUpdate
     st = Store()
-    tid = st.create_task("weekly_report", {})
+    tid = st.create_task("weekly_report_demo", {})
     rv = st.get(tid)["row_version"]
     st.update(tid, expect_row_version=rv, pause_reason="a")
     with pytest.raises(ConcurrentUpdate):
@@ -82,9 +82,12 @@ def test_placeholder_formatting():
     flat = {"total.sales": 2512345.6, "total.sales_wow": -0.0362, "region.华东.share": 0.295}
     text, missing = resolve("销售额 {{total.sales}}，环比下降 {{total.sales_wow|abs}}（{{total.sales_wow}}），"
                             "占比 {{region.华东.share}} {{nope}}", flat)
-    assert text.startswith("销售额 251.2 万元，环比下降 3.6%（-3.6%），占比 29.5%")
+    assert text.startswith("销售额 2,512,346 元，环比下降 3.6%（-3.6%），占比 29.5%")  # 金额单位为元、取整数
     assert missing == ["nope"]
-    assert fmt_value("anomaly.A1.impact", -185000) == "-18.5 万元"
+    assert fmt_value("anomaly.A1.impact", -185000) == "-185,000 元"
+    assert fmt_value("anomaly.A1.impact", -185000, absolute=True) == "185,000 元"
+    assert fmt_value("rc.华南.饮品.gross_margin_chg", -0.0986) == "-9.9 个百分点"
+    assert fmt_value("region.华东.target_rate", 0.84093) == "84.1%"
 
 
 # ---------------------------------------------------------------- 质检
@@ -132,7 +135,7 @@ def test_cause_without_evidence_must_say_pending(kpis):
 def test_feedback_parsing(kpis):
     from mini_employee.config import load_employee
     from mini_employee.payloads import parse_feedback
-    cfg = load_employee("weekly_report").raw["feedback"]
+    cfg = load_employee("weekly_report_demo").raw["feedback"]
     todos = parse_feedback("华东区下滑原因没说清楚，请结合周会纪要补充；摘要改为3条", cfg, kpis)
     assert todos[0]["section"] == "anomalies" and "华东" in todos[0]["keywords"]
     assert todos[1]["section"] == "summary" and todos[1]["max_items"] == 3
@@ -197,7 +200,7 @@ def test_idempotent_write_does_not_duplicate(tmp_path):
 # ---------------------------------------------------------------- 端到端
 
 def test_end_to_end_with_rework(orch, sample_files):
-    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files)
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files)
     assert orch.drive(tid) == S.PENDING_REVIEW
     orch.review(tid, "changes", "华东区下滑原因没说清楚，请结合周会纪要补充")
     t = orch.store.get(tid)

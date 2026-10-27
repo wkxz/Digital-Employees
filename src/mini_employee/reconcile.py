@@ -18,6 +18,8 @@ UP = ("环比", "增速", "增幅", "增长", "上涨", "上升", "暴涨", "大
 CLAIM_RE = re.compile(rf"({'|'.join(DOWN + UP)})[^，。；、（）()]{{0,8}}?"
                       r"(超过|超|逾|近|约|接近)?\s*([+\-]?\d+(?:\.\d+)?)\s*%(以上|左右)?")
 RANGE_RE = re.compile(r"±\s*(\d+(?:\.\d+)?)\s*%\s*(?:以内|之内|内)")  # “波动均在±2%以内”
+FLAT_RE = re.compile(r"基本持平|大致持平|基本平稳|变化不大|持平")  # 不带数字的“持平”说法，按 ±FLAT_TOL% 核对
+FLAT_TOL = 3.0
 # 这些说法不是“销售额环比”，口径不同，不做比较
 NOT_SALES = re.compile(r"客流|客单|毛利|周转|同比|损耗|转化|会员|折")
 SALES_WORDS = re.compile(r"销售|业绩|营收|营业额")
@@ -46,6 +48,11 @@ def claims(text: str) -> list[dict[str, Any]]:
                     "approx" if qual in ("近", "约", "接近") or tail == "左右" else "exact"
                 out.append({"text": m.group(0), "value": -v if neg else v, "kind": kind, "sentence": sentence,
                             "clause": clause.strip()})
+            if sales_sentence and not CLAIM_RE.search(clause):
+                for m in FLAT_RE.finditer(clause):
+                    out.append({"text": m.group(0), "value": 0.0, "kind": "flat", "sentence": sentence,
+                                "clause": clause.strip()})
+                    break
             if sales_sentence:
                 for m in RANGE_RE.finditer(clause):
                     out.append({"text": m.group(0), "value": float(m.group(1)), "kind": "within",
@@ -56,6 +63,8 @@ def claims(text: str) -> list[dict[str, Any]]:
 def check(claim: dict[str, Any], actual_pct: float, tol: float = 1.0, approx: float = 5.0) -> str:
     """返回 consistent / larger（方向一致、实际幅度明显更大）/ mismatch。"""
     v = claim["value"]
+    if claim["kind"] == "flat":
+        return "consistent" if abs(actual_pct) <= FLAT_TOL else "mismatch"
     if claim["kind"] == "within":
         return "consistent" if abs(actual_pct) <= v + 0.005 else "mismatch"
     if (v < 0) != (actual_pct < 0):
@@ -71,6 +80,10 @@ def check(claim: dict[str, Any], actual_pct: float, tol: float = 1.0, approx: fl
         return "mismatch"
     # “超30%”实际 -53%：说法没错但明显低估，值得提示；“超过40%”实际 48% 属正常表述范围
     return "larger" if a - b > approx and a > b * 1.25 else "consistent"
+
+
+def _src(m: dict[str, Any]) -> str:
+    return f"第 {m['week']} 周周会纪要" if m.get("week") else "周会纪要"
 
 
 def _who(m: dict[str, Any]) -> str:
@@ -104,8 +117,8 @@ def notes(content: dict[str, Any], kpis: dict[str, Any], minutes: list[dict[str,
                 out.append({
                     "id": a["id"], "minutes_no": e, "minutes_ref": m.get("ref"), "claim": c["text"], "actual": actual,
                     "status": status,
-                    "text": f"数据核对：周会纪要（{m.get('ref', e)}，{_who(m)}）口头通报“{c['text']}”；按销售明细交易数据核算，"
-                            f"{a['label']}销售额环比为 {actual:+.2f}%，{tail}",
+                    "text": f"数据核对：{_src(m)}（{m.get('ref', e)}，{_who(m)}）口头通报“{c['text']}”；按销售明细交易数据核算，"
+                            f"{a['label']}销售额环比为 {actual:+.1f}%，{tail}",
                 })
     return out
 
@@ -184,7 +197,7 @@ def extra_notes(content: dict[str, Any], kpis: dict[str, Any], minutes: list[dic
             if not bad or key in seen:
                 continue
             seen.add(key)
-            facts = "、".join(f"{label}销售额环比为 {v:+.2f}%" for label, v, _ in bad)
+            facts = "、".join(f"{label}销售额环比为 {v:+.1f}%" for label, v, _ in bad)
             if c["kind"] == "within":
                 tail = "超出该范围，请以交易数据为准。"
             elif bad[0][2] == "larger":
@@ -193,6 +206,6 @@ def extra_notes(content: dict[str, Any], kpis: dict[str, Any], minutes: list[dic
                 tail = "与会上口径不一致，请以交易数据为准，并核实口径差异（如统计范围、时间区间）。"
             out.append({"id": None, "minutes_no": m["no"], "minutes_ref": m.get("ref"), "claim": c["text"],
                         "status": bad[0][2],
-                        "text": f"数据核对：周会纪要（{m.get('ref', m['no'])}，{_who(m)}）口头通报“{c['clause']}”；"
+                        "text": f"数据核对：{_src(m)}（{m.get('ref', m['no'])}，{_who(m)}）口头通报“{c['clause']}”；"
                                 f"按销售明细交易数据核算，{facts}，{tail}"})
     return out

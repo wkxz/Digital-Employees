@@ -27,7 +27,7 @@ def test_check_model(fake_server, capsys):
 def test_wrong_key_pauses_with_clear_reason(fake_server, monkeypatch, orch, sample_files):
     from mini_employee.states import S
     monkeypatch.setenv("MINI_API_KEY", "wrong")
-    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files)
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files)
     assert orch.drive(tid) == S.SUSPENDED
     assert "401" in orch.store.get(tid)["pause_reason"]
 

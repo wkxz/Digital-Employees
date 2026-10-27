@@ -12,11 +12,11 @@ from typing import Any
 FIELD_TYPES = {"iso_week", "file", "enum", "string"}
 STEP_TYPES = {"tool", "agent", "render"}
 PURPOSES = {"analysis", "draft"}
-SECTION_KINDS = {"paragraphs", "bullets", "anomalies", "appendix"}
+SECTION_KINDS = {"paragraphs", "bullets", "anomalies", "appendix", "data_quality"}
 TEXT_KINDS = {"paragraphs", "bullets"}
 SEVERITIES = {"blocking", "warning"}
 PROVIDERS = {"mock", "openai_compatible", "deepseek", "qwen", "glm"}
-TABLES = {"kpi_overall", "region_table", "store_rank", "category_table"}
+TABLES = {"kpi_overall", "region_table", "store_rank", "category_table", "top_items", "anomaly_table"}
 LIMITS = ("max_model_turns_per_step", "max_step_seconds", "max_task_seconds", "tool_max_retries",
           "qc_max_fix_rounds", "rework_max_rounds")
 FIX_SKILL_SECTIONS = ("岗位职责", "撰写周报", "注意事项")  # 自动修正步骤固定使用

@@ -1,0 +1,43 @@
+id: A02
+name: 官方 A-02 正常任务（含重复上传记录）
+category: 正常
+input:
+  period: 2026-W43
+  files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/official_a/周会纪要_2026W43.docx}
+steps:
+  - expect:
+      state: PENDING_REVIEW
+      kpis:
+        total.sales: 632485.76
+        total.sales_wow: 0.043863
+        total.gross_margin: 0.601113
+        total.delivery_share: 0.313207
+        region.华东.sales_wow: -0.027846
+        region.华南.sales: 203120.0
+        region.华南.sales_wow: 0.189981
+        region.华南.target_rate: 1.057917
+        region.华北.target_rate: 0.951798
+        region.西南.target_rate: 0.989214
+        store.广州海珠店.sales_wow: 0.301189
+        store.成都高新店.sales_wow: 0.173841
+        rc.华南.饮品.gross_margin: 0.605472
+        rc.华南.饮品.gross_margin_prev: 0.703606
+      report_contains:
+        - 632,486 元
+        - "+4.4%"
+        - 60.1%
+        - 31.3%
+        - 105.8%
+        - 203,120 元
+        - 深圳南山店 10/21 记录ID 重复 29 条（实收合计 5,629 元）
+        - 广州天河店（GZ01）
+        - 广州海珠店（GZ02）
+        - 深圳南山店（SZ01）
+        - 深圳福田店（SZ02）
+        - 成都高新店（CD02）
+        - 第 43 周周会纪要
+        - 8寸生日蛋糕
+        - 60.5%
+        - 上周广州海珠店 10/14 无销售数据，上周基数偏低
+      report_not_contains: ["208,749", 客单价, 同比, "{{"]
+      qc_all_blocking_passed: true

@@ -3,6 +3,7 @@ name: 跨年周（2027 第 1 周环比 2026 第 53 周）
 category: 边界
 env: {MINI_TODAY: "2027-01-12"}
 input:
+  employee: weekly_report_demo
   period: 2027-W01
   files: {sales_file: data/fixtures/销售明细_2027W01.xlsx, minutes_file: data/fixtures/周会纪要_2027W01.docx}
 steps:

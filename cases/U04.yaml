@@ -2,6 +2,7 @@ id: U04
 name: 用户用例：脏数据文件缺“品类”列 → 暂停并列出实际列 → 上传补回品类列的文件后继续
 category: 缺材料
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files:
     sales_file: data/user_cases/case_03_dirty_data/销售明细_脏数据.xlsx

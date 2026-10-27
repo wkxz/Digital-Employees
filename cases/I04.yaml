@@ -2,6 +2,7 @@ id: I04
 name: 统计周期格式错误 → 拒绝
 category: 不合规
 input:
+  employee: weekly_report_demo
   period: 第44周
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
 steps:

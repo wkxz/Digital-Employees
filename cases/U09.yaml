@@ -2,6 +2,7 @@ id: U09
 name: 用户用例：列名全部换成别名（网点名称 / 商品类别 / 成交金额）→ 暂停并列出实际列名（加别名的现场演练见 tests/test_config_driven.py）
 category: 缺材料
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files:
     sales_file: data/user_cases/case_06_column_alias/销售明细_别名列.xlsx

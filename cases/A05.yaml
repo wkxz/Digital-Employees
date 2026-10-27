@@ -1,0 +1,11 @@
+id: A05
+name: 官方 A-05 统计周期超出数据范围 → 暂停并说明数据实际覆盖的日期
+category: 不合规
+input:
+  period: 2026-W46
+  files: {sales_file: data/official_a/销售明细.xlsx}
+steps:
+  - expect:
+      state: WAITING_INPUT
+      pause_contains: [销售数据实际覆盖 2026-08-31 至 2026-11-01, 不包含统计周期 2026-W46]
+      report_not_contains: [W46 实收]

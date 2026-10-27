@@ -2,6 +2,7 @@ id: M01
 name: 缺周会纪要 → 暂停待补 → 补充后继续
 category: 缺材料
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx}
 steps:

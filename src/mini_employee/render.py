@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,37 @@ def _pct(v: float | None) -> str:
     return fmt_value("x_wow", v)
 
 
+def _kpi_overall_full(kpis: dict[str, Any]) -> dict[str, Any]:
+    """有成本、渠道、目标数据时的核心指标表：全公司及各区域的实收、环比、毛利率、外卖占比、目标达成率。"""
+    f = kpis["flat"]
+
+    def row(name: str, prefix: str) -> list[str]:
+        return [name, fmt_value("sales", f.get(f"{prefix}.sales")), _pct(f.get(f"{prefix}.sales_wow")),
+                fmt_value("gross_margin", f.get(f"{prefix}.gross_margin")),
+                fmt_value("delivery_share", f.get(f"{prefix}.delivery_share")),
+                fmt_value("target", f.get(f"{prefix}.target")), fmt_value("target_rate", f.get(f"{prefix}.target_rate"))]
+
+    regions = sorted(kpis["tables"]["region"], key=lambda r: r["sales"], reverse=True)
+    return {"columns": ["范围", "本周实收", "环比", "毛利率", "外卖占比", "本周目标", "目标达成率"],
+            "rows": [row("全公司", "total")] + [row(r["name"], f"region.{r['name']}") for r in regions]}
+
+
+def _anomaly_table(kpis: dict[str, Any]) -> dict[str, Any]:
+    """环比超过阈值的区域与门店全部列出（不受异常条目数上限影响），按影响金额排序。"""
+    th = kpis["threshold"]
+    rows = []
+    for dim, kind in (("region", "区域"), ("store", "门店")):
+        for r in kpis["tables"][dim]:
+            if r.get("sales_wow") is not None and abs(r["sales_wow"]) > th:
+                name = f"{r['name']}（{r['code']}）" if r.get("code") else r["name"]
+                rows.append((abs(r["sales"] - r["sales_prev"]),
+                             [name, kind if dim == "region" else f"{r.get('region') or ''}{r.get('store_type') or '门店'}",
+                              fmt_value("sales", r["sales"]), fmt_value("sales", r["sales_prev"]), _pct(r["sales_wow"]),
+                              fmt_value("impact", r["sales"] - r["sales_prev"])]))
+    rows.sort(key=lambda x: (x[1][1] != "区域", -x[0]))
+    return {"columns": ["对象", "类型", "本周实收", "上周实收", "环比", "变动金额"], "rows": [r for _, r in rows]}
+
+
 def build_tables(kpis: dict[str, Any]) -> dict[str, dict[str, Any]]:
     f = kpis["flat"]
     overall = [["销售额", fmt_value("sales", f["total.sales"]), fmt_value("sales", f["total.sales_prev"]),
@@ -53,9 +85,11 @@ def build_tables(kpis: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
     def dim_table(rows: list[dict], name_col: str) -> dict[str, Any]:
         rows = sorted(rows, key=lambda r: r["sales"], reverse=True)
-        return {"columns": [name_col, "本周销售额", "上周销售额", "环比", "占比"],
+        margin = all("gross_margin" in r for r in rows)
+        return {"columns": [name_col, "本周销售额", "上周销售额", "环比", "占比"] + (["毛利率"] if margin else []),
                 "rows": [[r["name"], fmt_value("sales", r["sales"]), fmt_value("sales", r["sales_prev"]),
-                          _pct(r["sales_wow"]), fmt_value("share", r["share"])] for r in rows]}
+                          _pct(r["sales_wow"]), fmt_value("share", r["share"])]
+                         + ([fmt_value("gross_margin", r["gross_margin"])] if margin else []) for r in rows]}
 
     stores = [r for r in kpis["tables"]["store"] if r["sales_wow"] is not None]
     ranked = sorted(stores, key=lambda r: r["sales_wow"], reverse=True)
@@ -65,16 +99,24 @@ def build_tables(kpis: dict[str, Any]) -> dict[str, dict[str, Any]]:
                             _pct(r["sales_wow"])] for i, r in enumerate(ranked[:n], 1)]
                   + [[f"Bottom{i}", r["name"], r.get("region") or "", fmt_value("sales", r["sales"]),
                       _pct(r["sales_wow"])] for i, r in enumerate(reversed(ranked[-n:]), 1)]}
+    items = {r["name"]: r for r in kpis["tables"].get("item", [])}
+    top = [items[n] for n in kpis.get("top_items", []) if n in items]
     return {
-        "kpi_overall": {"columns": ["指标", "本周", "上周", "环比"], "rows": overall},
+        "kpi_overall": _kpi_overall_full(kpis) if "total.gross_margin" in f else
+        {"columns": ["指标", "本周", "上周", "环比"], "rows": overall},
         "region_table": dim_table(kpis["tables"]["region"], "区域"),
         "category_table": dim_table(kpis["tables"]["category"], "品类"),
         "store_rank": store_rank,
+        "top_items": {"columns": ["排名", "单品", "品类", "本周实收", "环比", "占比"],
+                      "rows": [[str(r["rank"]), r["name"], r.get("category") or "", fmt_value("sales", r["sales"]),
+                                _pct(r["sales_wow"]), fmt_value("share", r["share"])] for r in top]},
+        "anomaly_table": _anomaly_table(kpis),
     }
 
 
 TABLE_TITLES = {"kpi_overall": "核心指标", "region_table": "区域销售", "category_table": "品类销售",
-                "store_rank": "门店环比 Top / Bottom"}
+                "store_rank": "门店环比 Top / Bottom", "top_items": "本周实收前 5 名单品",
+                "anomaly_table": "环比波动超过阈值的区域与门店"}
 
 
 def build_blocks(content: dict[str, Any], kpis: dict[str, Any], charts: dict[str, str],
@@ -88,6 +130,8 @@ def build_blocks(content: dict[str, Any], kpis: dict[str, Any], charts: dict[str
     unresolved: list[str] = []
 
     refs = {m["no"]: m.get("ref", f"第{m['no']}条") for m in minutes or []}
+    weeks = {m.get("week") for m in minutes or []} - {None}
+    src = f"第 {weeks.pop()} 周周会纪要 " if len(weeks) == 1 else "周会纪要 "
 
     def r(t: str) -> str:
         out, miss = resolve(" ".join(str(t).split()) if "\n" in str(t) else str(t), flat)
@@ -100,6 +144,7 @@ def build_blocks(content: dict[str, Any], kpis: dict[str, Any], charts: dict[str
     for sec in cfg["sections"]:
         sid, kind = sec["id"], sec.get("kind", "paragraphs")
         blocks.append(("h2", sec["title"]))
+        table_at = len(blocks)  # 异常章节：清单表放在逐条分析之前
         texts[sid] = []
         if kind in ("paragraphs", "bullets"):
             for t in content.get(sid, []):
@@ -117,10 +162,10 @@ def build_blocks(content: dict[str, Any], kpis: dict[str, Any], charts: dict[str
                 blocks.append(("p", msg))
             for it in items:
                 a = an_info.get(it.get("id"), {})
-                head = f"{it.get('id', '')} {a.get('label', it.get('title', ''))}：销售额环比 {_pct(a.get('wow'))}，" \
-                       f"影响 {fmt_value('impact', a.get('impact'))}" if a else it.get("title", "")
+                head = f"{it.get('id', '')} {a.get('label', it.get('title', ''))}：环比 {_pct(a.get('wow'))}，" \
+                       f"变动 {fmt_value('impact', a.get('impact'))}" if a else it.get("title", "")
                 ev = it.get("evidence") or []
-                basis = f"（依据：周会纪要 {'；'.join(refs.get(e, f'第{e}条') for e in ev)}）" if ev else ""
+                basis = f"（依据：{src}{'；'.join(refs.get(e, f'第{e}条') for e in ev)}）" if ev else ""
                 item = {"head": head, "phenomenon": r(it.get("phenomenon", "")),
                         "cause": r(it.get("cause", "")) + basis, "suggestion": r(it.get("suggestion", "")),
                         "checks": checks.get(it.get("id"), [])}
@@ -133,13 +178,117 @@ def build_blocks(content: dict[str, Any], kpis: dict[str, Any], charts: dict[str
             for t in appendix_lines(kpis, meta):
                 texts[sid].append(t)
                 blocks.append(("bullet", t))
+        elif kind == "data_quality":
+            for t in quality_lines(kpis, meta, minutes or []):
+                texts[sid].append(t)
+                blocks.append(("bullet", t))
         for tname in sec.get("tables", []):
-            blocks.append(("table", {"title": TABLE_TITLES.get(tname, tname), **tables[tname]}))
-        for cname in sec.get("charts", []):
-            if cname in charts:
-                blocks.append(("image", {"path": charts[cname], "caption": cname}))
+            if not tables[tname]["rows"]:
+                continue
+            block = ("table", {"title": TABLE_TITLES.get(tname, tname), **tables[tname]})
+            if kind == "anomalies":
+                blocks.insert(table_at, block)
+                table_at += 1
+            else:
+                blocks.append(block)
+        imgs = [{"path": charts[c], "caption": c} for c in sec.get("charts", []) if c in charts]
+        if sec.get("chart_layout") == "row" and len(imgs) > 1:  # 两张图并排，节省篇幅
+            blocks.append(("image_row", imgs))
+        else:
+            blocks += [("image", x) for x in imgs]
     blocks.append(("footer", meta.get("footer", "").format_map(_Default(meta))))
     return blocks, texts, unresolved
+
+
+CLOSED = re.compile(r"停业|闭店|歇业|装修|改造|暂停营业")
+FAULT = re.compile(r"故障|无法上传|未上传|断网|系统异常|宕机")
+
+
+def _md(d: str) -> str:
+    return f"{int(d[5:7])}/{int(d[8:10])}"
+
+
+def _gap_groups(days: list[dict[str, Any]]) -> list[tuple[str, list[str]]]:
+    out: dict[str, list[str]] = {}
+    for g in days:
+        out.setdefault(g["store"], []).append(g["date"])
+    return list(out.items())
+
+
+def _gap_reason(store: str, minutes: list[dict[str, Any]]) -> tuple[str, dict[str, Any] | None]:
+    """缺数日期的原因：在纪要中找提到该门店、且讲停业或系统故障的条目。"""
+    from .payloads import store_core
+    for m in minutes:
+        full = f"{m.get('header') or ''}{m['text']}"
+        if store in full or store_core(store) in full:
+            if CLOSED.search(full):
+                return "closed", m
+            if FAULT.search(full):
+                return "fault", m
+    return "unknown", None
+
+
+def quality_lines(kpis: dict[str, Any], meta: dict[str, Any], minutes: list[dict[str, Any]]) -> list[str]:
+    """数据质量说明（程序生成，数字精确）：退货、重复、缺数日期及原因、上周缺数对环比的影响、其他清洗处理。"""
+    q = kpis.get("quality") or {}
+    weeks = {kpis["period"]: "本周", kpis["prev_period"]: "上周"}
+    from .periods import parse_week
+    span = {k: (parse_week(k).start.isoformat(), parse_week(k).end.isoformat()) for k in weeks}
+
+    def which(d: str | None) -> str | None:
+        return next((label for k, label in weeks.items() if d and span[k][0] <= d <= span[k][1]), None)
+
+    lines = []
+    ret = q.get("returns") or {}
+    if ret.get("count"):
+        t = f"退货：本周退货 {ret['count']} 笔，合计 {ret['amount']:,.0f} 元，已按负数直接冲减实收"
+        if ret.get("top"):
+            x = ret["top"][0]
+            t += f"；金额最大的是{x['store']} {_md(x['date'])} {x['item']}退货 {x['qty']:.0f} 份（{x['amount']:,.0f} 元）"
+        lines.append(t + "。")
+    else:
+        lines.append("退货：本周没有退货记录。")
+    issues = (meta.get("cleaning") or {}).get("issues", [])
+    for it in issues:
+        if it.get("kind") == "duplicate" and which(it.get("date")):
+            lines.append(f"重复记录：{which(it['date'])}{it['row'].split(' ', 1)[-1]} {_md(it['date'])} "
+                         f"{it['problem']}，已{it['action']}，再计算各项指标。")
+    for store, days in _gap_groups(q.get("missing_days", [])):
+        when = "、".join(_md(d) for d in days) if len(days) < 3 else f"{_md(days[0])}–{_md(days[-1])}"
+        kind, m = _gap_reason(store, minutes)
+        cite = f"据{_src_of(m)}（{m.get('ref')}）" if m else ""
+        if kind == "closed":
+            why = next((c.strip() for c in re.split(r"[，。；;]", m["text"]) if CLOSED.search(c)), "该店停业")
+            lines.append(f"缺数日期：{store} {when} 无销售数据，{cite}：“{why}”，属正常停业，不是数据缺失。")
+        elif kind == "fault":
+            manual = re.search(r"约\s*([\d,，.]+)\s*元", m["text"])
+            extra = (f"纪要提到的手工台账实收约 {manual.group(1)} 元未经系统核实，未计入实收合计" if manual
+                     else "当日实收未计入")
+            lines.append(f"缺数日期：{store} {when} 无系统销售数据，{cite}系收银系统故障；{extra}，"
+                         "该店及所在区域本周实收与环比偏低。")
+        else:
+            lines.append(f"缺数日期：{store} {when} 无销售数据，纪要未提及原因，原因待核实；当日按无销售计算。")
+    for store, days in _gap_groups(q.get("missing_days_prev", [])):
+        wow = kpis["flat"].get(f"store.{store}.sales_wow")
+        lines.append(f"环比基数：上周{store} {'、'.join(_md(d) for d in days)} 无销售数据，上周基数偏低，"
+                     f"本周该店环比（{_pct(wow)}）偏高，解读时请注意。")
+    other = [it for it in issues if it.get("kind") in ("null", "negative", "qty") and which(it.get("date"))]
+    if other:
+        lines.append(f"其他清洗：本周及上周共 {len(other)} 行数据存在空值、非退货负数或销量异常，已按规则处理（"
+                     + "；".join(f"{it['row']}，{it['problem']}，{it['action']}" for it in other[:3])
+                     + ("等" if len(other) > 3 else "") + "）。")
+    dup_seen = any(it.get("kind") == "duplicate" and which(it.get("date")) for it in issues)
+    if not dup_seen:
+        lines.append("重复记录：本周及上周未发现重复上传的记录。")
+    if not q.get("missing_days") and not q.get("missing_days_prev"):
+        lines.append("缺数日期：本周及上周各门店营业日均有销售数据。")
+    lines.append(f"口径：实收 = 原价 − 折扣，退货为负数冲减；毛利率 = （实收 − 成本）÷ 实收；ISO 周（周一至周日），"
+                 f"环比基期 {kpis['prev_period']}；数据来源：{'、'.join(meta.get('sources', []))}。")
+    return lines
+
+
+def _src_of(m: dict[str, Any]) -> str:
+    return f"第 {m['week']} 周周会纪要" if m.get("week") else "周会纪要"
 
 
 def appendix_lines(kpis: dict[str, Any], meta: dict[str, Any]) -> list[str]:
@@ -152,7 +301,7 @@ def appendix_lines(kpis: dict[str, Any], meta: dict[str, Any]) -> list[str]:
         f"数据清洗：原始 {c.get('total_rows', '-')} 行，剔除重复 {c.get('duplicates', 0)} 行、"
         f"关键字段为空 {c.get('null_rows', 0)} 行、销售额为负 {c.get('negative_rows', 0)} 行，"
         f"销量异常 {c.get('bad_qty_rows', 0)} 行（保留销售额、不计销量），保留 {c.get('kept_rows', '-')} 行。",
-        "报告中的全部数字由程序根据销售明细计算生成，文字分析中的原因均引用周会纪要，纪要未提及的标注“原因待确认”。",
+        "报告中的全部数字由程序根据销售明细计算生成，文字分析中的原因均引用周会纪要，纪要未提及的标注“原因待核实”。",
     ]
     issues = c.get("issues", [])
     for it in issues[:8]:
@@ -192,10 +341,14 @@ def write_docx(blocks: list[Block], path: Path) -> None:
     doc = Document()
     sec = doc.sections[0]
     sec.left_margin = sec.right_margin = Cm(2.2)
+    sec.top_margin = sec.bottom_margin = Cm(2.0)
     normal = doc.styles["Normal"]
     normal.font.name = "Microsoft YaHei"
     normal.element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "微软雅黑")
     normal.font.size = Pt(10.5)
+    normal.paragraph_format.space_after = Pt(3)  # Word 默认段后 10 磅、1.15 倍行距，周报篇幅有限，收紧
+    normal.paragraph_format.line_spacing = 1.0
+    doc.styles["List Bullet"].paragraph_format.space_after = Pt(2)
     for kind, val in blocks:
         if kind == "title":
             p = doc.add_paragraph()
@@ -205,7 +358,7 @@ def write_docx(blocks: list[Block], path: Path) -> None:
             _set_cn_font(p.add_run(val), 9, color=RGBColor(0x66, 0x66, 0x66))
         elif kind == "h2":
             p = doc.add_paragraph()
-            p.paragraph_format.space_before = Pt(12)
+            p.paragraph_format.space_before = Pt(8)
             _set_cn_font(p.add_run(val), 13, True, RGBColor(0x1F, 0x3A, 0x5F))
         elif kind == "p":
             doc.add_paragraph(val)
@@ -239,8 +392,16 @@ def write_docx(blocks: list[Block], path: Path) -> None:
                     cells[i].text = str(c)
                     if i > 0:
                         cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            for row in t.rows:
+                for cell in row.cells:
+                    for r in cell.paragraphs[0].runs:
+                        r.font.size = Pt(9)
         elif kind == "image":
             doc.add_picture(val["path"], width=Cm(15.5))
+        elif kind == "image_row":
+            t = doc.add_table(rows=1, cols=len(val))
+            for cell, img in zip(t.rows[0].cells, val):
+                cell.paragraphs[0].add_run().add_picture(img["path"], width=Cm(16.0 / len(val) - 0.2))
         elif kind == "footer" and val:
             p = doc.add_paragraph()
             _set_cn_font(p.add_run(val), 8.5, color=RGBColor(0x88, 0x88, 0x88))
@@ -272,6 +433,8 @@ def write_md(blocks: list[Block], path: Path) -> None:
             out.append("")
         elif kind == "image":
             out += ["", f"![{val['caption']}]({Path(val['path']).name})", ""]
+        elif kind == "image_row":
+            out += [""] + [f"![{x['caption']}]({Path(x['path']).name})" for x in val] + [""]
         elif kind == "footer" and val:
             out += ["", "---", f"*{val}*"]
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
@@ -329,9 +492,12 @@ def write_html(blocks: list[Block], path: Path) -> None:
             out += ["<tr>" + "".join(f'<td{" class=n" if i else ""}>{e(str(c))}</td>' for i, c in enumerate(row))
                     + "</tr>" for row in val["rows"]]
             out.append("</tbody></table>")
-        elif kind == "image":
-            data = base64.b64encode(Path(val["path"]).read_bytes()).decode()
-            out.append(f'<img alt="{e(val["caption"])}" src="data:image/png;base64,{data}">')
+        elif kind in ("image", "image_row"):
+            imgs = val if kind == "image_row" else [val]
+            style = f' style="width:{100 / len(imgs) - 1:.0f}%"' if len(imgs) > 1 else ""
+            for x in imgs:
+                data = base64.b64encode(Path(x["path"]).read_bytes()).decode()
+                out.append(f'<img alt="{e(x["caption"])}"{style} src="data:image/png;base64,{data}">')
         elif kind == "footer" and val:
             out.append(f'<p class="footer">{e(val)}</p>')
     if in_list:
@@ -340,15 +506,20 @@ def write_html(blocks: list[Block], path: Path) -> None:
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
+LINE = 1.78  # 行高 / 字号：按 Word 中微软雅黑单倍行距实测（10.5 磅字行距约 18 磅），页数估算与 Word 一致
+SAFETY = 0.5   # 英寸：Word 换页时段落不拆到页尾、表格整行下移，每页底部常空出几行，估算时预留
+
+
 class _PdfLayout:
     """用 matplotlib 排版 A4 PDF：内置思源黑体，中文不依赖系统字体，也不需要 Word / LibreOffice。"""
     W, H, LEFT, RIGHT, TOP, BOTTOM = 8.27, 11.69, 0.85, 0.85, 0.8, 0.8  # 英寸
 
-    def __init__(self, pdf: Any):
+    def __init__(self, pdf: Any, reserve: float = 0.0):
         import matplotlib.pyplot as plt
 
         from .tools import charts  # noqa: F401  注册中文字体
 
+        self.bottom = self.BOTTOM + reserve  # 估算页数时每页底部多预留的空间
         self.plt, self.pdf, self.fig, self.page = plt, pdf, None, 0
         self.cw = self.W - self.LEFT - self.RIGHT
         self.new_page()
@@ -367,7 +538,7 @@ class _PdfLayout:
         self.plt.close(self.fig)
 
     def need(self, h: float) -> None:
-        if self.y - h < self.BOTTOM:
+        if self.y - h < self.bottom:
             self.new_page()
 
     @staticmethod
@@ -389,7 +560,7 @@ class _PdfLayout:
              before: float = 0.0, after: float = 4.0) -> None:
         self.y -= before / 72
         pw = self.width(prefix, size)
-        lh = size * 1.6 / 72
+        lh = size * LINE / 72
         for i, ln in enumerate(self.wrap(s, size, self.cw - indent - pw)):
             self.need(lh)
             if i == 0 and prefix:
@@ -400,7 +571,7 @@ class _PdfLayout:
             self.y -= lh
         self.y -= after / 72
 
-    def table(self, title: str, columns: list[str], rows: list[list[Any]], size: float = 8.5) -> None:
+    def table(self, title: str, columns: list[str], rows: list[list[Any]], size: float = 9.0) -> None:
         from matplotlib.patches import Rectangle
 
         self.text(title, 9.5, "#444444", before=4, after=2)
@@ -409,7 +580,7 @@ class _PdfLayout:
         scale = min(1.0, self.cw / sum(natural))
         widths = [w * scale for w in natural] if scale < 1 else [w + (self.cw - sum(natural)) / len(natural)
                                                                   for w in natural]
-        rh = size * 1.9 / 72
+        rh = size * 2.1 / 72  # 与 Word 表格行高（9 磅字约 18 磅）一致
 
         def row(vals: list[str], header: bool) -> None:
             self.need(rh)
@@ -431,13 +602,27 @@ class _PdfLayout:
         page = self.page
         row(columns, True)
         for r in cells[1:]:
-            if self.y - rh < self.BOTTOM:
+            if self.y - rh < self.bottom:
                 self.new_page()
             if self.page != page:  # 表格跨页时在新页重复表头
                 page = self.page
                 row(columns, True)
             row(r, False)
         self.y -= 6 / 72
+
+    def image_row(self, paths: list[str]) -> None:
+        import matplotlib.image as mpimg
+
+        gap = 0.15
+        w = (self.cw - gap * (len(paths) - 1)) / len(paths)
+        imgs = [mpimg.imread(p) for p in paths]
+        h = max(w * im.shape[0] / im.shape[1] for im in imgs)
+        self.need(h)
+        for i, im in enumerate(imgs):
+            ax = self.fig.add_axes([(self.LEFT + i * (w + gap)) / self.W, (self.y - h) / self.H, w / self.W, h / self.H])
+            ax.imshow(im)
+            ax.axis("off")
+        self.y -= h + 6 / 72
 
     def image(self, path: str) -> None:
         import matplotlib.image as mpimg
@@ -451,38 +636,57 @@ class _PdfLayout:
         self.y -= h + 6 / 72
 
 
+class _NoPdf:
+    def savefig(self, fig: Any) -> None:
+        pass
+
+
+def count_pages(blocks: list[Block]) -> int:
+    """按 A4 版式排一遍（不写文件），估算页数，供“篇幅”质检使用。页脚说明不计入正文。"""
+    lay = _PdfLayout(_NoPdf(), reserve=SAFETY)
+    _layout(lay, [b for b in blocks if b[0] != "footer"])
+    lay.close()
+    return lay.page
+
+
 def write_pdf(blocks: list[Block], path: Path) -> None:
     from matplotlib.backends.backend_pdf import PdfPages
 
     with PdfPages(path, metadata={"CreationDate": None}) as pdf:  # 去掉生成时间，同样内容生成同样的文件
         lay = _PdfLayout(pdf)
-        for kind, val in blocks:
-            if kind == "title":
-                lay.text(val, 18, "#1F3A5F", after=4)
-            elif kind == "meta":
-                lay.text(val, 8.5, "#666666", after=8)
-            elif kind == "h2":
-                lay.need(0.6)  # 避免标题落在页尾
-                lay.text(val, 13, "#1F3A5F", before=8, after=4)
-            elif kind == "p":
-                lay.text(val)
-            elif kind == "bullet":
-                lay.text(val, prefix="• ", indent=0.1, after=2)
-            elif kind == "anomaly":
-                lay.text(val["head"], 10.5, "#1F3A5F", before=4, after=2)
-                for label, key in (("现象", "phenomenon"), ("原因", "cause"), ("建议", "suggestion")):
-                    if val[key]:
-                        lay.text(val[key], prefix=f"{label}：", indent=0.25, after=2)
-                for note in val.get("checks", []):
-                    label, _, body = note.partition("：")
-                    lay.text(body, color="#5A3A00", prefix=f"{label}：", indent=0.25, after=2)
-            elif kind == "table":
-                lay.table(val["title"], val["columns"], val["rows"])
-            elif kind == "image":
-                lay.image(val["path"])
-            elif kind == "footer" and val:
-                lay.text(val, 8, "#888888", before=10)
+        _layout(lay, blocks)
         lay.close()
+
+
+def _layout(lay: "_PdfLayout", blocks: list[Block]) -> None:
+    for kind, val in blocks:
+        if kind == "title":
+            lay.text(val, 18, "#1F3A5F", after=4)
+        elif kind == "meta":
+            lay.text(val, 8.5, "#666666", after=8)
+        elif kind == "h2":
+            lay.need(0.6)  # 避免标题落在页尾
+            lay.text(val, 13, "#1F3A5F", before=8, after=4)
+        elif kind == "p":
+            lay.text(val)
+        elif kind == "bullet":
+            lay.text(val, prefix="• ", indent=0.1, after=2)
+        elif kind == "anomaly":
+            lay.text(val["head"], 10.5, "#1F3A5F", before=4, after=2)
+            for label, key in (("现象", "phenomenon"), ("原因", "cause"), ("建议", "suggestion")):
+                if val[key]:
+                    lay.text(val[key], prefix=f"{label}：", indent=0.25, after=2)
+            for note in val.get("checks", []):
+                label, _, body = note.partition("：")
+                lay.text(body, color="#5A3A00", prefix=f"{label}：", indent=0.25, after=2)
+        elif kind == "table":
+            lay.table(val["title"], val["columns"], val["rows"])
+        elif kind == "image":
+            lay.image(val["path"])
+        elif kind == "image_row":
+            lay.image_row([x["path"] for x in val])
+        elif kind == "footer" and val:
+            lay.text(val, 8, "#888888", before=10)
 
 
 WRITERS = {"docx": write_docx, "md": write_md, "html": write_html, "pdf": write_pdf}

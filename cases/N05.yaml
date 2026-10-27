@@ -2,6 +2,7 @@ id: N05
 name: 退回意见“摘要改为 3 条、补充客单价”被采纳并校验
 category: 正常
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
 steps:

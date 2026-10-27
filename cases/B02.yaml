@@ -2,6 +2,7 @@ id: B02
 name: 列名不同（金额 / 大区 / 类别）按别名自动识别
 category: 边界
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/fixtures/销售明细_别名列.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
 steps:

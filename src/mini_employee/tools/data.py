@@ -294,11 +294,22 @@ def clean_sales(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
 
 # ---------------------------------------------------------------- KPI
 
+DELIVERY = ("外卖",)
+RATIOS = ("gross_margin", "delivery_share")  # 比率指标：不算相对环比，用“变动（百分点）”表示
+
+
 def _agg(df: pd.DataFrame) -> dict[str, float]:
-    out = {"sales": float(df["销售额"].sum()), "qty": float(df["销量"].sum())}
+    sales = float(df["销售额"].sum())
+    out = {"sales": sales, "qty": float(df["销量"].sum())}
     if "订单数" in df.columns:
         out["orders"] = float(df["订单数"].sum())
         out["atv"] = out["sales"] / out["orders"] if out["orders"] else 0.0
+    if "成本" in df.columns:  # 毛利 = 实收 − 成本；毛利率 = 毛利 ÷ 实收
+        out["gross_profit"] = sales - float(df["成本"].sum())
+        out["gross_margin"] = out["gross_profit"] / sales if sales else 0.0
+    if "渠道" in df.columns:
+        out["delivery_sales"] = float(df.loc[df["渠道"].isin(DELIVERY), "销售额"].sum())
+        out["delivery_share"] = out["delivery_sales"] / sales if sales else 0.0
     return out
 
 
@@ -307,12 +318,53 @@ def _with_wow(cur: dict[str, float], prev: dict[str, float]) -> dict[str, float]
     for k, v in cur.items():
         p = prev.get(k, 0.0)
         out[f"{k}_prev"] = p
-        out[f"{k}_wow"] = (v / p - 1) if p else None
+        if k in RATIOS:
+            out[f"{k}_chg"] = v - p if k in prev else None
+        else:
+            out[f"{k}_wow"] = (v / p - 1) if p else None
     return out
 
 
+def _target_of(targets: list[dict[str, Any]], week: Week) -> dict[str, float]:
+    keys = {f"W{week.week}", f"W{week.week:02d}", week.key, week.compact}
+    return {t["region"]: t["target"] for t in targets if t["week"] in keys}
+
+
+def _store_days(df: pd.DataFrame, week: Week) -> list[dict[str, Any]]:
+    """已开业门店在该周没有任何销售记录的日期（系统故障、停业等）。开业日取主数据的开业日期，没有时取首次有销售的日期。"""
+    if df.empty:
+        return []
+    first = df.groupby("门店")["日期"].min()
+    if "开业日期" in df.columns:
+        opened = pd.to_datetime(df.groupby("门店")["开业日期"].first(), errors="coerce")
+    else:
+        opened = first
+    have = set(zip(df["门店"], df["日期"].dt.normalize()))
+    region = df.drop_duplicates("门店").set_index("门店")["区域"].to_dict()
+    out = []
+    for store in sorted(first.index):
+        start = opened.get(store)
+        start = first[store] if pd.isna(start) else start
+        for d in week.days():
+            ts = pd.Timestamp(d)
+            if ts >= start and (store, ts) not in have:
+                out.append({"store": store, "region": region.get(store), "date": d.isoformat()})
+    return out
+
+
+def _returns(cur: pd.DataFrame) -> dict[str, Any]:
+    r = cur[(cur["销量"] < 0) & (cur["销售额"] < 0)]
+    what = "商品" if "商品" in r.columns else "品类"
+    top = (r.groupby(["门店", "日期", what], as_index=False)[["销量", "销售额"]].sum()
+           .sort_values("销售额").head(3))
+    return {"count": int(len(r)), "amount": float(r["销售额"].sum()),
+            "top": [{"store": x["门店"], "date": x["日期"].date().isoformat(), "item": x[what],
+                     "qty": float(-x["销量"]), "amount": float(x["销售额"])} for _, x in top.iterrows()]}
+
+
 def compute_kpis(df: pd.DataFrame, week: Week, threshold: float, top_n: int, min_base: float,
-                 dimensions: list[str]) -> dict[str, Any]:
+                 dimensions: list[str], targets: list[dict[str, Any]] | None = None, top_items: int = 5,
+                 margin_shift: float = 0.05) -> dict[str, Any]:
     cur = df[(df["日期"] >= pd.Timestamp(week.start)) & (df["日期"] <= pd.Timestamp(week.end))]
     pw = week.prev
     prev = df[(df["日期"] >= pd.Timestamp(pw.start)) & (df["日期"] <= pd.Timestamp(pw.end))]
@@ -334,10 +386,11 @@ def compute_kpis(df: pd.DataFrame, week: Week, threshold: float, top_n: int, min
     flat: dict[str, Any] = {}
     total = _with_wow(_agg(cur), _agg(prev))
     total["stores"] = int(cur["门店"].nunique())
-    for k, v in total.items():
-        flat[f"total.{k}"] = v
+    goal = _target_of(targets or [], week)
 
     groups = {"region": ["区域"], "store": ["门店"], "category": ["品类"], "rc": ["区域", "品类"]}
+    if "商品" in df.columns:
+        groups["item"] = ["商品"]
     tables: dict[str, list[dict]] = {}
     for dim, cols in groups.items():
         c_grp = {k if isinstance(k, tuple) else (k,): g for k, g in cur.groupby(cols)}
@@ -349,14 +402,34 @@ def compute_kpis(df: pd.DataFrame, week: Week, threshold: float, top_n: int, min
             m = _with_wow(c, p)
             m["share"] = m["sales"] / total["sales"] if total["sales"] else 0.0
             name = ".".join(key)
+            if dim == "region" and name in goal:  # 目标达成率 = 本周实收 ÷ 该区域本周目标
+                m["target"] = goal[name]
+                m["target_rate"] = m["sales"] / goal[name] if goal[name] else None
             for k, v in m.items():
-                flat[f"{dim}.{name}.{k}"] = v
+                if dim != "item" or k in ("sales", "sales_wow", "share"):
+                    flat[f"{dim}.{name}.{k}"] = v
             rows.append({"name": name, "keys": list(key), **m})
         if dim == "store":
-            region_of = cur.drop_duplicates("门店").set_index("门店")["区域"].to_dict()
+            info = cur.drop_duplicates("门店").set_index("门店")
             for r in rows:
-                r["region"] = region_of.get(r["name"])
+                r["region"] = info["区域"].get(r["name"])
+                for col, k in (("门店编码", "code"), ("店型", "store_type")):
+                    if col in info.columns:
+                        r[k] = info[col].get(r["name"])
+        if dim == "item":
+            cat = cur.drop_duplicates("商品").set_index("商品")["品类"].to_dict()
+            for r in rows:
+                r["category"] = cat.get(r["name"])
         tables[dim] = rows
+    regions = {r["name"] for r in tables["region"]}
+    if goal and regions <= set(goal):
+        total["target"] = sum(goal[g] for g in regions)
+        total["target_rate"] = total["sales"] / total["target"] if total["target"] else None
+    for k, v in total.items():
+        flat[f"total.{k}"] = v
+    ranked = sorted(tables.get("item", []), key=lambda r: r["sales"], reverse=True)[:top_items]
+    for i, r in enumerate(ranked, 1):
+        r["rank"] = i
 
     daily = []
     for i, d in enumerate(week.days()):
@@ -366,18 +439,41 @@ def compute_kpis(df: pd.DataFrame, week: Week, threshold: float, top_n: int, min
             "sales": float(cur.loc[cur["日期"] == pd.Timestamp(d), "销售额"].sum()),
             "sales_prev": float(prev.loc[prev["日期"] == pd.Timestamp(pd_), "销售额"].sum()),
         })
+    weekly = []  # 近 4 周实收趋势（只取数据完整的周）
+    w = week
+    for _ in range(4):
+        part = df[(df["日期"] >= pd.Timestamp(w.start)) & (df["日期"] <= pd.Timestamp(w.end))]
+        if part["日期"].dt.date.nunique() < 7:
+            break
+        weekly.insert(0, {"week": w.key, "label": f"W{w.week}", "sales": float(part["销售额"].sum()),
+                          "target": sum(_target_of(targets or [], w).values()) or None})
+        w = w.prev
+
+    shifts = []  # 区域×品类毛利率明显变动（如促销让利），供分析与摘要引用
+    for r in tables["rc"]:
+        chg = r.get("gross_margin_chg")
+        if chg is not None and r["sales_prev"] > 0 and abs(chg) >= margin_shift:
+            shifts.append({"region": r["keys"][0], "category": r["keys"][1], "chg": chg,
+                           "cur": r["gross_margin"], "prev": r["gross_margin_prev"],
+                           "placeholder": f"rc.{r['name']}.gross_margin"})
+    quality = {"returns": _returns(cur), "missing_days": _store_days(cur, week),
+               "missing_days_prev": _store_days(prev, pw)}
 
     anomalies = detect_anomalies(tables, threshold, top_n, min_base, dimensions)
     return {
         "period": week.key, "period_label": week.label, "prev_period": pw.key,
-        "threshold": threshold, "flat": flat, "tables": tables, "daily": daily, "anomalies": anomalies,
+        "threshold": threshold, "flat": flat, "tables": tables, "daily": daily, "weekly": weekly,
+        "top_items": [r["name"] for r in ranked], "margin_shifts": shifts, "quality": quality,
+        "anomalies": anomalies,
     }
 
 
 _DIM_LABEL = {"region": "区域", "store": "门店", "category": "品类", "rc": "区域品类"}
 
 
-def _label(dim: str, name: str) -> str:
+def _label(dim: str, name: str, code: str | None = None) -> str:
+    if dim == "store" and code:
+        return f"{name}（{code}）"
     if dim == "region":
         return f"{name}区"
     if dim == "rc":
@@ -415,9 +511,10 @@ def detect_anomalies(tables: dict[str, list[dict]], threshold: float, top_n: int
                     continue
             found.append({
                 "dimension": dim, "dimension_label": _DIM_LABEL[dim], "entity": r["name"],
-                "label": _label(dim, r["name"]), "direction": "up" if wow > 0 else "down",
+                "label": _label(dim, r["name"], r.get("code")), "direction": "up" if wow > 0 else "down",
                 "sales": r["sales"], "sales_prev": r["sales_prev"], "wow": wow,
                 "impact": r["sales"] - r["sales_prev"], "region": r.get("region"),
+                "code": r.get("code"), "store_type": r.get("store_type"),
                 "placeholders": {"sales": f"{dim}.{r['name']}.sales", "wow": f"{dim}.{r['name']}.sales_wow",
                                  "impact_base": f"{dim}.{r['name']}.sales_prev"},
                 "drivers": [],
@@ -431,10 +528,11 @@ def detect_anomalies(tables: dict[str, list[dict]], threshold: float, top_n: int
     for a in found:
         parent = regions.get(a.get("region") or "")
         if a["dimension"] == "store" and parent and parent["direction"] == a["direction"]:
-            parent["drivers"].append({"store": a["entity"], "wow": a["wow"], "impact": a["impact"],
+            parent["drivers"].append({"store": a["entity"], "label": a["label"], "wow": a["wow"], "impact": a["impact"],
                                       "placeholder": a["placeholders"]["wow"]})
             continue
         merged.append(a)
+    merged = _group_by_store_type(merged)
     merged.sort(key=lambda a: abs(a["impact"]), reverse=True)
     merged = merged[:top_n]
     for i, a in enumerate(merged, 1):
@@ -442,31 +540,91 @@ def detect_anomalies(tables: dict[str, list[dict]], threshold: float, top_n: int
     return merged
 
 
+def _group_by_store_type(items: list[dict]) -> list[dict]:
+    """未并入区域的门店异常，同店型、同方向的 2 家及以上合并为一条（如“写字楼店（3 家）”回升），
+    原因多按店型概括（节后商场客流回落、写字楼复工），避免逐店重复，篇幅也更紧凑。"""
+    groups: dict[tuple, list[dict]] = {}
+    for a in items:
+        if a["dimension"] == "store" and a.get("store_type"):
+            groups.setdefault((a["direction"], a["store_type"]), []).append(a)
+    out = [a for a in items if not (a["dimension"] == "store" and len(groups.get((a["direction"], a.get("store_type")), [])) > 1)]
+    for (direction, kind), members in groups.items():
+        if len(members) < 2:
+            continue
+        sales, prev = sum(m["sales"] for m in members), sum(m["sales_prev"] for m in members)
+        out.append({
+            "dimension": "store_group", "dimension_label": "门店组", "entity": kind,
+            "label": f"{kind}（{len(members)} 家）", "direction": direction, "sales": sales, "sales_prev": prev,
+            "wow": sales / prev - 1 if prev else 0.0, "impact": sales - prev, "region": None, "store_type": kind,
+            "placeholders": {}, "drivers": [{"store": m["entity"], "label": m["label"], "wow": m["wow"], "impact": m["impact"],
+                                             "placeholder": m["placeholders"]["wow"]} for m in members],
+        })
+    return out
+
+
 # ---------------------------------------------------------------- 周会纪要
 
 _NUM_ITEM = re.compile(r"^\s*(\d+)\s*[.、．)）]\s*(.*)$")
 _CN_SECTION = re.compile(r"^([一二三四五六七八九十]+、)")
+_CN_HEADING = re.compile(r"^[一二三四五六七八九十]+、\S.{0,24}$")  # 正文样式写的“一、整体情况”也按章节标题处理
 _TAG = re.compile(r"^【([^】]{1,20})】\s*(.*)$")
+_SPEAKER = re.compile(r"^([^：:，。；（(]{1,10}[（(][^）)]{1,12}[）)])[：:]\s*(\S.*)$")  # “华南（陈某）：……”
+_META = re.compile(r"^(会议时间|时间|会议地点|地点|参会人员|参会人|出席人员|出席|主持人?|记录人?|缺席|抄送)[：:]")
+_WEEK = re.compile(r"第\s*(\d{1,2})\s*周")
+_YEAR = re.compile(r"((?:19|20)\d{2})\s*年")
+
+
+def _docx_blocks(path: Path) -> list[tuple[str, Any]]:
+    """按文档顺序返回段落与表格：[("p", (样式, 文本)) | ("table", [[单元格]])]。"""
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    doc = Document(str(path))
+    out: list[tuple[str, Any]] = []
+    for el in doc.element.body.iterchildren():
+        tag = el.tag.rsplit("}", 1)[-1]
+        if tag == "p":
+            p = Paragraph(el, doc)
+            out.append(("p", ((p.style.name if p.style is not None else "").lower(), p.text)))
+        elif tag == "tbl":
+            out.append(("table", [[c.text.strip() for c in r.cells] for r in Table(el, doc).rows]))
+    return out
+
+
+def _table_rows(rows: list[list[str]]) -> list[str]:
+    """表格（如行动项：事项 / 负责人 / 截止日期）每行转成一条纪要：“事项（负责人：…，截止日期：…）”。"""
+    rows = [r for r in rows if any(r)]
+    if len(rows) < 2:
+        return [" ".join(r) for r in rows]
+    head = rows[0]
+    out = []
+    for r in rows[1:]:
+        rest = "，".join(f"{h}：{v}" for h, v in zip(head[1:], r[1:]) if v)
+        out.append(f"{r[0]}（{rest}）" if rest else r[0])
+    return out
 
 
 def _minutes_lines(path: Path) -> list[tuple[str, str]]:
-    """返回 [(类型, 文本)]，类型为 section（二级及以下标题）或 line。段落内的换行拆成多行。"""
+    """返回 [(类型, 文本)]，类型为 title（一级标题）、section（二级及以下标题）或 line。段落内的换行拆成多行，表格每行一条。"""
     ext = path.suffix.lower()
     out: list[tuple[str, str]] = []
     if ext == ".docx":
-        for p in Document(str(path)).paragraphs:
-            style = (p.style.name if p.style is not None else "").lower()
-            if style == "title" or style == "heading 1":
+        for kind, val in _docx_blocks(path):
+            if kind == "table":
+                out += [("line", t) for t in _table_rows(val)]
                 continue
-            if style.startswith("heading"):
-                out.append(("section", p.text.strip()))
+            style, text = val
+            if style == "title" or style == "heading 1":
+                out.append(("title", text.strip()))
+            elif style.startswith("heading") or _CN_HEADING.match(text.strip()):
+                out.append(("section", text.strip()))
             else:
-                out += [("line", ln) for ln in p.text.splitlines()]
+                out += [("line", ln) for ln in text.splitlines()]
     elif ext in (".md", ".txt"):
         for ln in path.read_text(encoding="utf-8").splitlines():
             if re.match(r"^#\s", ln):
-                continue
-            if ln.startswith("##"):
+                out.append(("title", ln.lstrip("#").strip()))
+            elif ln.startswith("##") or _CN_HEADING.match(ln.strip()):
                 out.append(("section", ln.lstrip("#").strip()))
             else:
                 out.append(("line", ln))
@@ -475,19 +633,37 @@ def _minutes_lines(path: Path) -> list[tuple[str, str]]:
     return out
 
 
+def minutes_meta(path: Path) -> dict[str, Any]:
+    """纪要标题中的周次（如“经营周会纪要（2026 年第 44 周）”），用于核对是否与统计周期一致、报告中注明出处。"""
+    for kind, text in _minutes_lines(path):
+        if kind == "section":
+            break
+        if kind in ("title", "line") and "纪要" in text and (m := _WEEK.search(text)):
+            y = _YEAR.search(text)
+            return {"title": text.strip(), "week": int(m.group(1)), "year": int(y.group(1)) if y else None}
+    return {}
+
+
 def read_minutes(path: Path) -> list[dict[str, Any]]:
     """把纪要拆成可引用的条目：{no 内部编号, ref 原文位置（如“一、1”）, header 小标题, text 正文, section 所在章节}。
 
-    兼容常见写法：段落内软换行、“华东大区（负责人：…）：”这类小标题行、一个段落里写多条编号事项、二级标题分节。
+    兼容常见写法：段落内软换行、“华东大区（负责人：…）：”这类小标题行、“华南（陈某）：……”这类发言、
+    一个段落里写多条编号事项、二级标题或正文样式的“一、”分节、表格形式的行动项。
+    纪要标题、会议时间、参会人员等会议信息不作为条目。
     """
+    meta = minutes_meta(path)
     items: list[dict[str, Any]] = []
-    section, header, cur_no, auto_no = "", None, None, 0
+    section, header, cur_no, auto_no, started = "", None, None, 0, False
     for kind, raw in _minutes_lines(path):
+        if kind == "title":
+            continue
         if kind == "section":
-            section, header, cur_no, auto_no = raw, None, None, 0
+            section, header, cur_no, auto_no, started = raw, None, None, 0, True
             continue
         line = raw.strip()
         if not line:
+            continue
+        if not started and (_META.match(line) or line == meta.get("title")):
             continue
         m = _NUM_ITEM.match(line)
         if m:
@@ -502,6 +678,10 @@ def read_minutes(path: Path) -> list[dict[str, Any]]:
         if line.endswith(("：", ":")) and len(line) <= 40:  # 小标题行，作为后续正文的标题
             header = line.rstrip("：:")
             continue
+        own_header = header
+        sp = _SPEAKER.match(line)
+        if sp:  # 发言人只属于这一条
+            own_header, line = sp.group(1), sp.group(2).strip()
         if m is None and header is None:
             auto_no += 1
             num = auto_no if cur_no is None else cur_no
@@ -509,7 +689,10 @@ def read_minutes(path: Path) -> list[dict[str, Any]]:
             num = cur_no if cur_no is not None else auto_no + 1
         sec = _CN_SECTION.match(section)
         ref = f"{sec.group(1)}{num}" if sec else (f"{section} 第{num}条" if section else f"第{num}条")
-        items.append({"no": len(items) + 1, "ref": ref, "section": section, "header": header, "tag": tag, "text": line})
+        item = {"no": len(items) + 1, "ref": ref, "section": section, "header": own_header, "tag": tag, "text": line}
+        if meta.get("week"):
+            item["week"] = meta["week"]
+        items.append(item)
     return items
 
 

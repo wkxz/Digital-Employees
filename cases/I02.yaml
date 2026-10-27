@@ -2,6 +2,7 @@ id: I02
 name: 上传 PDF 作为销售明细 → 表单校验拒绝
 category: 不合规
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/fixtures/经营数据.pdf, minutes_file: data/samples/周会纪要_2026W44.docx}
 steps:

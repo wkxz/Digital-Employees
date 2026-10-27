@@ -22,8 +22,8 @@ ui:                 ## 启动 Web 界面 http://localhost:8501
 
 demo:               ## 命令行跑一遍正常任务（发起 → 质检 → 待审核）
 	$(RUN) mini new --period 2026-W44 \
-	  --file sales_file=data/samples/销售明细_2026W44.xlsx \
-	  --file minutes_file=data/samples/周会纪要_2026W44.docx
+	  --file sales_file=data/official_a/销售明细.xlsx \
+	  --file minutes_file=data/official_a/周会纪要_2026W44.docx
 
 check-model:        ## 检查 .env 中的模型配置
 	$(RUN) mini check-model

@@ -27,6 +27,7 @@ class QCContext:
     sections: list[dict[str, Any]]
     todos: list[dict[str, Any]] = field(default_factory=list)
     prev_content: dict[str, Any] | None = None
+    pages: int | None = None  # 按交付版式估算的页数
 
 
 @dataclass
@@ -113,6 +114,8 @@ def structure(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
 UP_WORDS = ["增长", "上涨", "上升", "提升", "回升", "走高", "增加", "攀升"]
 DOWN_WORDS = ["下降", "下滑", "下跌", "减少", "回落", "走低", "萎缩", "降低"]
 NUM_RE = re.compile(r"[+\-−]?\d+(?:[.,]\d+)*\s*(?:%|％|万元|万|元|件|单|笔)")
+SIGNED_AFTER_WORD = re.compile(r"(增长|下降|下滑|下跌|上涨|上升|提升|回升|回落|减少|增加|降低|升至|降至|提高)(了)?\s*"
+                               r"\{\{\s*([^{}\s|]+)\s*\}\}")
 
 
 @rule("data_consistency", "数据一致性")
@@ -130,6 +133,13 @@ def data_consistency(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
                 continue
             details.append({"type": "hardcoded", "section": sid, "index": i, "field": fld, "text": m.group(0).strip(),
                             "msg": f"正文直接写了数字“{m.group(0).strip()}”，应使用占位符引用程序计算结果"})
+        for m in SIGNED_AFTER_WORD.finditer(text):
+            key = m.group(3)
+            leaf = key.rsplit(".", 1)[-1]
+            if (leaf.endswith(("_wow", "_chg")) or leaf == "impact") and key in ctx.flat:
+                details.append({"type": "sign_after_word", "section": sid, "index": i, "field": fld,
+                                "text": m.group(0), "key": key,
+                                "msg": f"“{m.group(1)}”后的 {{{{{key}}}}} 会带正负号，应写 {{{{{key}|abs}}}}"})
         for clause in re.split(r"[，,；;。！？\n]", text):
             keys = [k for k in find_keys(clause) if k.endswith("_wow")]
             vals = [ctx.flat.get(k) for k in keys]
@@ -211,11 +221,47 @@ def length(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
     if len(summary) > p.get("summary_max_items", 5):
         details.append({"type": "too_long", "section": "summary", "max_items": p.get("summary_max_items", 5),
                         "msg": f"摘要 {len(summary)} 条，超过 {p.get('summary_max_items', 5)} 条"})
+    for sid, n in (p.get("max_items") or {}).items():  # 如“下周关注事项不超过 5 条”
+        if sid != "summary" and len(ctx.content.get(sid, [])) > n:
+            details.append({"type": "too_long", "section": sid, "max_items": n,
+                            "msg": f"{sid} {len(ctx.content[sid])} 条，超过 {n} 条"})
     total = sum(len(t) for ts in ctx.texts.values() for t in ts)
     lo, hi = p.get("total_min_chars", 500), p.get("total_max_chars", 4000)
     if not lo <= total <= hi:
         details.append({"type": "total_length", "msg": f"正文 {total} 字，不在 {lo}–{hi} 字范围内"})
     return not details, details, "压缩摘要条数与字数"
+
+
+# ---------------------------------------------------------------- 篇幅（页数）
+
+@rule("page_limit", "篇幅")
+def page_limit(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
+    n = p.get("max_pages", 3)
+    if ctx.pages is None or ctx.pages <= n:
+        return True, [], ""
+    chars = sum(len(PH_RE.sub("0000", t)) for _, _, _, t in _iter_raw(ctx))
+    target = int(chars * n / ctx.pages * 0.85) // 50 * 50  # 表格、图表篇幅固定，只能压缩文字
+    return False, [{"type": "pages", "chars": chars, "target_chars": target,
+                    "msg": f"正文约 {ctx.pages} 页，超过 {n} 页；模型撰写的文字约 {chars} 字，请压缩到 {target} 字以内"}],         "表格里已有的数字不要在文字中逐项复述，每条只保留结论和原因"
+
+
+# ---------------------------------------------------------------- 超阈值对象逐一列出
+
+@rule("threshold_coverage", "波动对象逐一列出")
+def threshold_coverage(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
+    """环比超过阈值的区域 / 门店，必须在“异常与原因”的文字中逐一出现（作为异常条目或带动门店）。"""
+    pool = " ".join(ctx.texts.get("anomalies", []))
+    th = ctx.kpis["threshold"]
+    details = []
+    for dim in p.get("dimensions", ["region", "store"]):
+        for r in ctx.kpis["tables"].get(dim, []):
+            if r.get("sales_wow") is None or abs(r["sales_wow"]) <= th:
+                continue
+            if r["name"] not in pool:
+                details.append({"type": "not_listed", "entity": r["name"],
+                                "msg": f"{r['name']} 环比 {fmt_value('x_wow', r['sales_wow'])}，超过 ±{th * 100:.0f}%，"
+                                       "未在“异常与原因”中说明"})
+    return not details, details, "逐一列出环比超过阈值的区域和门店并说明原因"
 
 
 # ---------------------------------------------------------------- 敏感信息

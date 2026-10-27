@@ -19,7 +19,7 @@ def edit_employee(tmp_path, monkeypatch):
     base = tmp_path / "employees"
     shutil.copytree(ROOT / "employees", base)
     monkeypatch.setattr(C, "EMPLOYEES_DIR", base)
-    path = base / "weekly_report" / "employee.yaml"
+    path = base / "weekly_report_demo" / "employee.yaml"
 
     def edit(fn):
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -29,7 +29,7 @@ def edit_employee(tmp_path, monkeypatch):
 
 
 def _run(orch, sample_files, **fields):
-    tid = orch.create("weekly_report", {"period": "2026-W44", **fields}, sample_files)
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44", **fields}, sample_files)
     return tid, orch.drive(tid)
 
 
@@ -143,19 +143,19 @@ def test_config_mistakes_are_reported(edit_employee, change, expected):
     from mini_employee.validate import ConfigError
     edit_employee(change)
     with pytest.raises(ConfigError) as e:
-        load_employee("weekly_report")
+        load_employee("weekly_report_demo")
     assert any(expected in x for x in e.value.errors), e.value.errors
-    assert check_config("weekly_report") == 4
+    assert check_config("weekly_report_demo") == 4
 
 
 def test_current_config_is_valid(capsys):
     from mini_employee.cli import check_config
-    assert check_config("weekly_report") == 0
+    assert check_config("weekly_report_demo") == 0
     assert "校验通过" in capsys.readouterr().out
 
 
 def test_config_broken_mid_task_pauses_with_reason(edit_employee, orch, sample_files):
-    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files, {"faults": [{"tool": "llm", "mode": "timeout"}]})
+    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files, {"faults": [{"tool": "llm", "mode": "timeout"}]})
     assert orch.drive(tid) == S.SUSPENDED  # 执行到一半暂停
     edit_employee(lambda r: r["quality_checks"].append({"rule": "no_such_rule"}))  # 期间有人把配置改错了
     assert orch.retry(tid, clear_faults=True) == S.SUSPENDED

@@ -61,6 +61,9 @@ class MockLLM:
         if "slow" in self.faults:
             time.sleep(float(meta.get("slow_seconds", 2)))
         payload = json.loads(messages[1]["content"])
+        hit = re.search(r"原因(待[一-龥]{2})", str(messages[0].get("content", "")))  # 岗位说明里约定的标注词
+        payload.setdefault("pending_word", hit.group(1) if hit else "待确认")
+        payload["compact_phenomenon"] = "现象不必重复" in str(messages[0].get("content", ""))  # 岗位说明要求现象只写带动门店
         results = self._tool_results(messages)
         turn = meta.get("turn", 1)
         tool_names = {t["function"]["name"] for t in tools}
@@ -138,16 +141,19 @@ class MockLLM:
         for a, (_, _, res) in zip(items, searches):
             by_id[a["id"]] = res.get("matches", []) if isinstance(res, dict) else []
         out = []
+        pw = p.get("pending_word", "待确认")
         for a in items:
             ph = a["placeholders"]
             matches = by_id.get(a["id"], [])
             fb = self._feedback_for(a, p.get("feedback"))
             matches = [m for m in matches if not m["text"].startswith(("下周计划", "会议时间"))]
             used = matches if fb else matches[:1]
-            phen = f"{a['label']}本周销售额 {{{{{ph['sales']}}}}}，环比{_dir_word(a['direction'])} " \
+            phen = f"{a['label']}本周{p.get('sales_word', '销售额')} {{{{{ph['sales']}}}}}，环比{_dir_word(a['direction'])} " \
                    f"{{{{{ph['wow']}|abs}}}}，影响金额 {{{{{ph['impact']}}}}}。"
             if a.get("drivers"):
-                phen += "主要由" + "、".join(f"{d['store']}（{{{{{d['placeholder']}}}}}）" for d in a["drivers"]) + "带动。"
+                lead = "主要由" + "、".join(f"{d['store']}（{{{{{d['placeholder']}}}}}）" if "（" not in d["store"]
+                                           else f"{d['store']}环比 {{{{{d['placeholder']}}}}}" for d in a["drivers"]) + "带动。"
+                phen = lead if p.get("compact_phenomenon") else phen + lead
             for c in a.get("related_categories", []):
                 phen += (f"受此影响，{c['category']}品类整体环比{_dir_word(c['direction'])} {{{{{c['placeholder']}|abs}}}}，"
                          f"剔除{a['entity']}区后基本持平。")
@@ -159,13 +165,13 @@ class MockLLM:
                 cause = "；".join(cause_sentences(m, names) for m in used) + "。"
                 evidence = [m["no"] for m in used]
             else:
-                cause, evidence = "周会纪要未提及相关情况，原因待确认，建议区域经理核实后补充。", []
+                cause, evidence = f"周会纪要未提及相关情况，原因{pw}，建议区域经理核实后补充。", []
             if a["direction"] == "down":
                 sug = f"建议{a['label']}负责人跟进上述原因，制定针对性措施，并在下周会议同步恢复进展。"
             else:
                 sug = f"建议评估{a['label']}增长的可持续性，总结可复制的经验。"
             out.append({"id": a["id"], "phenomenon": phen, "cause": cause, "evidence": evidence, "suggestion": sug,
-                        "brief": "原因待确认" if not evidence else brief(cause)})
+                        "brief": f"原因{pw}" if not evidence else brief(cause)})
         return {"anomalies": out}
 
     # ------------------------------------------------------------ 撰写周报
@@ -178,19 +184,36 @@ class MockLLM:
         regions = ov["regions"]
         cats = ov["categories"]
         an = p.get("anomalies", [])
+        pw = p.get("pending_word", "待确认")
+        full = ov.get("has_margin")  # 有成本、渠道、目标数据：按实收 / 毛利率 / 外卖占比 / 目标达成率写
+        sec_ids = {s["id"] for s in p.get("sections", [])}
+        rates = {r["name"]: r for r in ov.get("region_targets", [])}
 
         def region_sentence(r: dict, flip_it: bool = False) -> str:
             d = r["direction"]
             if flip_it:
                 d = "up" if d == "down" else "down"
-            return f"{r['name']}区销售额 {{{{region.{r['name']}.sales}}}}，环比{_dir_word(d)} {{{{region.{r['name']}.sales_wow|abs}}}}"
+            out = f"{r['name']}区{'实收' if full else '销售额'} {{{{region.{r['name']}.sales}}}}，" \
+                  f"环比{_dir_word(d)} {{{{region.{r['name']}.sales_wow|abs}}}}"
+            if r["name"] in rates:
+                out += f"，目标达成率 {{{{region.{r['name']}.target_rate}}}}"
+            return out
 
-        summary = [f"本周总销售额 {{{{total.sales}}}}，环比{_dir_word(tot['sales_direction'])} {{{{total.sales_wow|abs}}}}；"
-                   f"销量 {{{{total.qty}}}} 件，环比 {{{{total.qty_wow}}}}。"]
-        for a in an[:3]:
+        if full:
+            head = (f"本周实收 {{{{total.sales}}}}，环比{_dir_word(tot['sales_direction'])} {{{{total.sales_wow|abs}}}}，"
+                    f"毛利率 {{{{total.gross_margin}}}}")
+            if ov.get("has_delivery"):
+                head += "，外卖占比 {{total.delivery_share}}"
+            if ov.get("has_target"):
+                head += "，目标达成率 {{total.target_rate}}"
+            summary = [head + "。"]
+        else:
+            summary = [f"本周总销售额 {{{{total.sales}}}}，环比{_dir_word(tot['sales_direction'])} {{{{total.sales_wow|abs}}}}；"
+                       f"销量 {{{{total.qty}}}} 件，环比 {{{{total.qty_wow}}}}。"]
+        for a in an[:2 if full else 3]:
             cause = a.get("brief") or a["cause"].split("；")[0].rstrip("。")
             summary.append(f"{a['label']}环比{_dir_word(a['direction'])} {{{{anomaly.{a['id']}.sales_wow|abs}}}}，"
-                           f"{'原因待确认' if '待确认' in cause else '主要原因：' + cause}。")
+                           f"{'原因' + pw if pw in cause else '主要原因：' + cause}。")
         moving = [r for r in regions if r["direction"] != "flat"]
         if moving:
             best = max(moving, key=lambda r: float(r["sales_wow"].rstrip("%")))
@@ -201,12 +224,21 @@ class MockLLM:
                                   f"{worst['name']}区环比下降 {{{{region.{worst['name']}.sales_wow|abs}}}}。")
         summary.append(f"本周共识别 {len(an)} 项异常波动，详见“异常与原因”。" if an else "本周各项指标波动均在正常范围内。")
 
-        overall = [f"本周 {{{{total.stores}}}}门店实现销售额 {{{{total.sales}}}}，上周为 {{{{total.sales_prev}}}}，"
+        word = "实收" if full else "销售额"
+        overall = [f"本周 {{{{total.stores}}}}门店实现{word} {{{{total.sales}}}}，上周为 {{{{total.sales_prev}}}}，"
                    f"环比{_dir_word(tot['sales_direction'])} {{{{total.sales_wow|abs}}}}。"]
         if ov.get("has_orders"):
             overall.append(f"订单数 {{{{total.orders}}}}，环比 {{{{total.orders_wow}}}}；客单价 {{{{total.atv}}}}，"
                            f"环比 {{{{total.atv_wow}}}}。")
-        overall.append("从日趋势看，周末（周六、周日）为销售高峰，详见下图。")
+        if full:
+            t = "毛利率 {{total.gross_margin}}（上周 {{total.gross_margin_prev}}）"
+            if ov.get("has_delivery"):
+                t += "，外卖占比 {{total.delivery_share}}"
+            if ov.get("has_target"):
+                t += "；本周目标 {{total.target}}，目标达成率 {{total.target_rate}}"
+            overall.append(t + "。")
+        else:
+            overall.append("从日趋势看，周末（周六、周日）为销售高峰，详见下图。")
 
         sorted_regions = sorted(regions, key=lambda r: r["sales_rank"])
         flip_name = next((r["name"] for r in sorted_regions if r["direction"] == "down"), None) if flip else None
@@ -220,19 +252,27 @@ class MockLLM:
             if fr:
                 reg.append(f"重点关注区域{fr['name']}区：本周占总销售额 {{{{region.{fr['name']}.share}}}}，"
                            f"环比{_dir_word(fr['direction'])} {{{{region.{fr['name']}.sales_wow|abs}}}}。")
-        cat = ["；".join(f"{c['name']}销售额 {{{{category.{c['name']}.sales}}}}，占比 {{{{category.{c['name']}.share}}}}，"
+        cat = ["；".join(f"{c['name']}{word} {{{{category.{c['name']}.sales}}}}，占比 {{{{category.{c['name']}.share}}}}，"
                         f"环比{_dir_word(c['direction'])} {{{{category.{c['name']}.sales_wow|abs}}}}"
                         for c in sorted(cats, key=lambda c: c["sales_rank"])) + "。"]
-        nxt = [f"跟进{a['label']}：{'核实原因并补充说明' if '待确认' in a['cause'] else '落实改善措施并跟踪效果'}。"
+        if ov.get("top_items"):
+            cat.append(f"本周实收前 {len(ov['top_items'])} 名单品依次为：" + "、".join(i["name"] for i in ov["top_items"]) + "。")
+        for m in ov.get("margin_shifts", []):
+            k = m["placeholder"]
+            cat.append(f"{m['region']}区{m['category']}毛利率由上周 {{{{{k}_prev}}}} 变为 {{{{{k}}}}}"
+                       f"（{{{{{k}_chg}}}}），需关注促销让利对毛利的影响。")
+        nxt = [f"跟进{a['label']}：{'核实原因并补充说明' if pw in a['cause'] else '落实改善措施并跟踪效果'}。"
                for a in an if a["direction"] == "down"]
         nxt += [f"复盘{a['label']}的增长经验，评估是否推广。" for a in an if a["direction"] == "up"]
-        for it in p.get("action_items", []):  # 会上已定的决策与行动项原样列入
-            nxt.append(f"会议决定：{re.sub(r'^下周计划[：:]', '', it['text'])}。")
+        acts = [f"会议决定：{re.sub(r'^下周计划[：:]', '', it['text'])}。" for it in p.get("action_items", [])]
+        nxt = (acts + nxt)[:5] if full else nxt + acts  # 会上已定的行动项优先列入
         if not nxt:
             nxt = ["保持当前经营节奏，持续关注各区域客流变化。"]
         if "hardcode_number" in self.faults and not p.get("previous"):
             overall[0] = overall[0].replace("{{total.sales_wow|abs}}", f"{abs(tot['sales_wow_value']) * 100:.1f}%")
 
+        if "regions" not in sec_ids and p.get("sections"):  # 没有单独的区域章节：区域情况写进整体
+            overall += reg
         content = {"summary": summary, "overall": overall, "regions": reg, "categories": cat, "next_week": nxt}
         for sec in p.get("sections", []):  # 配置中新增的章节：真实模型按 guide 写，Mock 写一句占位
             if sec["id"] not in content:
@@ -315,9 +355,16 @@ class MockLLM:
                 elif d.get("type") == "cause_missing":
                     for it in c.get("anomalies", []):
                         if it["id"] == d["id"]:
-                            it["cause"], it["evidence"] = "周会纪要未提及相关情况，原因待确认。", []
-                elif d.get("type") == "too_long" and d.get("section") == "summary":
-                    c["summary"] = c["summary"][: d.get("max_items", 5)]
+                            word = re.search(r"“(待[一-龥]{2})”", d.get("msg", ""))
+                            it["cause"], it["evidence"] = f"周会纪要未提及相关情况，原因{word.group(1) if word else '待确认'}。", []
+                elif d.get("type") == "too_long" and d.get("section") in c:
+                    c[d["section"]] = c[d["section"]][: d.get("max_items", 5)]
+                elif d.get("type") == "pages":  # 篇幅超限：只保留每章前两句、建议只留第一个分句
+                    for sec in ("overall", "categories"):
+                        if sec in c:
+                            c[sec] = c[sec][:2]
+                    for it in c.get("anomalies", []):
+                        it["suggestion"] = re.split(r"[，；]", it.get("suggestion", ""))[0].rstrip("。") + "。"
                 elif d.get("type") == "keyword_missing":
                     sec = d["section"] if d.get("section") in c else "overall"
                     c[sec].append(f"关于{d['keyword']}：本周相关指标详见上表。")

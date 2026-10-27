@@ -3,6 +3,7 @@ name: 模型调用未开放的工具 → 拒绝并留痕，任务继续
 category: 审核流转
 mock_only: true   # 依赖 Mock 模型注入的错误
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
   faults: [{tool: mock, mode: forbidden_tool}]

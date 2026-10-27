@@ -3,6 +3,7 @@ name: 执行中强制结束程序 → 重启后从断点继续，结果与一次
 category: 断点恢复
 crash_after: analysis
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
 steps:

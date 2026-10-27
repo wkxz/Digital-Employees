@@ -2,6 +2,7 @@ id: F02
 name: 指标计算服务持续不可用 → 暂停说明进度 → 恢复后从失败步骤继续（赛题场景 2）
 category: 故障
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
   faults: [{tool: compute_kpis, mode: error}]

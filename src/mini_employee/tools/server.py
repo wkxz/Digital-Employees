@@ -103,14 +103,19 @@ def compute_kpis(
     top_n: int = 5,
     min_base_sales: float = 0,
     dimensions: list[str] = ["region", "store", "category", "rc"],  # noqa: B006
+    top_items: Annotated[int, Field(ge=0, description="列出实收前几名的单品")] = 5,
 ) -> dict[str, Any]:
-    """计算本周与上周的 KPI（总体 / 区域 / 门店 / 品类 / 区域×品类）及环比，识别异常波动，结果写入 work/kpis.json。"""
+    """计算本周与上周的 KPI（总体 / 区域 / 门店 / 品类 / 区域×品类 / 单品）、毛利率、外卖占比、目标达成率及环比，
+    识别异常波动，统计退货与门店缺数日期，结果写入 work/kpis.json。"""
     src = _inside(task_dir, "work/sales_clean.csv")
     if not src.exists():
         raise ToolError(encode(MISSING_INPUT, "尚未读取销售明细"))
     df = pd.read_csv(src, parse_dates=["日期"])
+    tpath = _inside(task_dir, "work/targets.json")
+    targets = read_json(tpath) if tpath.exists() else []
     try:
-        kpis = D.compute_kpis(df, parse_week(period), anomaly_threshold, top_n, min_base_sales, dimensions)
+        kpis = D.compute_kpis(df, parse_week(period), anomaly_threshold, top_n, min_base_sales, dimensions, targets,
+                              top_items)
     except D.DataError as e:
         raise _fail(e) from e
     write_json(_inside(task_dir, "work/kpis.json"), kpis)
@@ -144,7 +149,7 @@ def read_minutes(task_dir: str, file_path: Annotated[str, Field(description="周
             if p.get(k) and (new := D.mask_pii(p[k])) != p[k]:
                 p[k], masked = new, masked + 1
     write_json(_inside(task_dir, "work/minutes.json"), paras)
-    return {"count": len(paras), "paragraphs": paras, "has_pii": has_pii, "masked": masked}
+    return {"count": len(paras), "paragraphs": paras, "has_pii": has_pii, "masked": masked, "meta": D.minutes_meta(path)}
 
 
 @mcp.tool
@@ -183,7 +188,7 @@ def render_charts(
     charts: list[str],
     idempotency_key: Annotated[str, Field(description="幂等键：同一键重复调用不重复生成")],
 ) -> dict[str, Any]:
-    """根据 work/kpis.json 生成图表 PNG（daily_trend / region_wow / category_wow）。"""
+    """根据 work/kpis.json 生成图表 PNG（daily_trend / region_wow / category_wow / weekly_trend / region_target）。"""
     kpis = read_json(_inside(task_dir, "work/kpis.json"))
     out: dict[str, str] = {}
     reused = []
@@ -191,7 +196,8 @@ def render_charts(
         if kind not in C.CHART_TITLES:
             raise ToolError(encode(BAD_ARGS, f"未知图表类型 {kind}，可选 {list(C.CHART_TITLES)}"))
         path = _inside(task_dir, f"work/charts/{kind}.png")
-        _, hit = idempotent_write(path, sha256_json([idempotency_key, kind, kpis["flat"], kpis["daily"]]),
+        _, hit = idempotent_write(path, sha256_json([idempotency_key, kind, kpis["flat"], kpis["daily"],
+                                                       kpis.get("weekly")]),
                                   lambda tmp, k=kind: C.render(k, kpis, tmp))
         out[kind] = f"work/charts/{kind}.png"
         if hit:
@@ -235,8 +241,9 @@ def generate_report(
         if fmt == "md":
             for c in charts.values():
                 shutil.copy(c, out_dir / Path(c).name)
-    write_json(out_dir / "texts.json", {"sections": texts, "unresolved": unresolved,
-                                        "images": [b[1]["caption"] for b in blocks if b[0] == "image"],
+    write_json(out_dir / "texts.json", {"sections": texts, "unresolved": unresolved, "pages": R.count_pages(blocks),
+                                        "images": [b[1]["caption"] for b in blocks if b[0] == "image"]
+                                        + [x["caption"] for b in blocks if b[0] == "image_row" for x in b[1]],
                                         "tables": [b[1]["title"] for b in blocks if b[0] == "table"]})
     return {"files": files, "texts_path": f"output/{version_tag}/texts.json", "unresolved": unresolved,
             "reused": reused}

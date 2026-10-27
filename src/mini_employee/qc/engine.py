@@ -13,7 +13,7 @@ from ..placeholders import PH_RE, fmt_value
 from ..tools.data import IDCARD_RE, PHONE_RE
 from .rules import RULES, QCContext, Result
 
-PROGRAM_FIXABLE = {"hardcoded", "pii", "word", "unknown_anomaly"}
+PROGRAM_FIXABLE = {"hardcoded", "pii", "word", "unknown_anomaly", "sign_after_word"}
 
 
 def run_rules(ctx: QCContext, specs: list[dict[str, Any]]) -> list[Result]:
@@ -50,6 +50,13 @@ def program_fix(content: dict[str, Any], failures: list[dict[str, Any]], flat: d
                 if key:
                     _set_item_text(c, d, _replace_in_clause(text, d["text"], "{{" + key + "}}"))
                     actions.append(f"数字“{d['text']}”与该句所述对象的程序计算值一致，替换为占位符 {{{{{key}}}}}")
+                    continue
+                left.append(d)
+            elif t == "sign_after_word":
+                text = _item_text(c, d)
+                if text is not None and d["text"] in text:
+                    _set_item_text(c, d, text.replace(d["text"], d["text"].replace(d["key"], d["key"] + "|abs")))
+                    actions.append(f"“{d['text']}”改为不带正负号的写法")
                     continue
                 left.append(d)
             elif t in ("pii", "word"):

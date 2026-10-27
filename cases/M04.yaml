@@ -2,6 +2,7 @@ id: M04
 name: 执行中发现本周数据不完整 → 暂停待补 → 补充后从断点继续
 category: 缺材料
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/fixtures/销售明细_本周不完整.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
 steps:

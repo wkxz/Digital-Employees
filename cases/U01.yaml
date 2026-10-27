@@ -3,6 +3,7 @@ name: 用户提供的正常用例（不同列名、分节纪要、口头说法�
 category: 正常
 # 基准值已用销售明细独立核算（2026-10-23）
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/user_cases/case_01_normal/销售明细_2026W44.xlsx, minutes_file: data/user_cases/case_01_normal/周会纪要_2026W44.docx}
 steps:
@@ -23,13 +24,13 @@ steps:
         rc.华南.生鲜食品.sales_wow: 0.3314
       anomaly_labels: [华东区, 华南区生鲜食品]
       report_contains:            # 事实（来自纪要）与程序生成的文字：任何模型都必须满足
-        - 69.9 万元
+        - 698,897 元
         - 海贝思
         - 停业
         - 秋季生鲜狂欢节
         - 数据核对
-        - 华东区销售额环比为 -53.35%
-        - 华南区生鲜食品销售额环比为 +33.14%，与会上口径不一致
+        - 华东区销售额环比为 -53.3%
+        - 华南区生鲜食品销售额环比为 +33.1%，与会上口径不一致
         - 50万元
         - 周三
         - 周会纪要 一、1

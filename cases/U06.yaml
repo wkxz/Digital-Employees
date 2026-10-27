@@ -2,6 +2,7 @@ id: U06
 name: 用户用例：未上传周会纪要 → 暂停（同时告知销售明细已通过）→ 补传纪要后继续，结果与 case_01 一致
 category: 缺材料
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/user_cases/case_04_no_minutes/销售明细_2026W44.xlsx}
 steps:

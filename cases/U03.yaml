@@ -2,6 +2,7 @@ id: U03
 name: 用户用例：缺上周数据 → 补传完整的更正版文件 → 旧文件整体作废
 category: 缺材料
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files:
     sales_file: data/user_cases/case_02_missing_last_week/销售明细_2026W44_单周.xlsx

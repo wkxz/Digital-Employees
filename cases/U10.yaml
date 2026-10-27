@@ -2,6 +2,7 @@ id: U10
 name: 用户用例：销售明细含会员手机号、纪要含“内部绝密” → 拒绝，不进入执行（脱敏模式见 tests/test_robustness.py）
 category: 不合规
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files:
     sales_file: data/user_cases/case_07_privacy_leak/销售明细_含隐私信息.xlsx

@@ -77,10 +77,24 @@ def overview(kpis: dict[str, Any]) -> dict[str, Any]:
     stores = [r for r in t["store"] if r["sales_wow"] is not None]
     best = max(stores, key=lambda r: r["sales_wow"]) if stores else None
     worst = min(stores, key=lambda r: r["sales_wow"]) if stores else None
+    items = {r["name"]: r for r in t.get("item", [])}
     return {
         "total": {"sales": fmt_value("sales", f["total.sales"]), "sales_wow": fmt_value("x_wow", f["total.sales_wow"]),
                   "sales_direction": _direction(f["total.sales_wow"]), "sales_wow_value": f["total.sales_wow"]},
         "has_orders": "total.orders" in f,
+        "has_margin": "total.gross_margin" in f, "has_delivery": "total.delivery_share" in f,
+        "has_target": "total.target_rate" in f,
+        "region_targets": [{"name": r["name"], "target_rate": fmt_value("target_rate", r.get("target_rate")),
+                            "gross_margin": fmt_value("gross_margin", r.get("gross_margin"))}
+                           for r in t["region"] if r.get("target_rate") is not None],
+        # 实收前几名单品（程序排序），写作时按此顺序点名
+        "top_items": [{"rank": i, "name": n, "sales_wow": fmt_value("x_wow", items[n]["sales_wow"])}
+                      for i, n in enumerate(kpis.get("top_items", []), 1) if n in items],
+        # 区域×品类毛利率明显变动（如促销让利导致毛利率下降）
+        "margin_shifts": [{"region": m["region"], "category": m["category"],
+                           "now": fmt_value("gross_margin", m["cur"]), "last_week": fmt_value("gross_margin", m["prev"]),
+                           "change": fmt_value("x_chg", m["chg"]), "placeholder": m["placeholder"]}
+                          for m in kpis.get("margin_shifts", [])],
         "regions": rows("region"), "categories": rows("category"),
         # 日趋势只能依据这里的数据描述，不得推测
         "daily": [{"date": d["date"], "weekday": f"周{d['weekday']}", "sales": fmt_value("sales", d["sales"]),
@@ -97,16 +111,17 @@ def anomaly_inputs(kpis: dict[str, Any]) -> list[dict[str, Any]]:
     for a in kpis["anomalies"]:
         keys = a["keys"] if "keys" in a else a["entity"].split(".")
         if a["dimension"] == "store":
-            hints = [a["entity"], store_core(a["entity"])]
+            hints = [a["entity"], store_core(a["entity"])] + ([a["store_type"]] if a.get("store_type") else [])
         else:
             hints = list(keys)
         out.append({
             "id": a["id"], "label": a["label"], "dimension": a["dimension_label"], "entity": a["entity"],
+            **({"store_type": a["store_type"]} if a.get("store_type") else {}),
             "direction": a["direction"], "wow": fmt_value("x_wow", a["wow"]), "impact": fmt_value("impact", a["impact"]),
             "placeholders": {"sales": f"anomaly.{a['id']}.sales", "wow": f"anomaly.{a['id']}.sales_wow",
                              "impact": f"anomaly.{a['id']}.impact"},
-            "drivers": [{"store": d["store"], "wow": fmt_value("x_wow", d["wow"]), "placeholder": d["placeholder"]}
-                        for d in a["drivers"]],
+            "drivers": [{"store": d.get("label", d["store"]), "wow": fmt_value("x_wow", d["wow"]),
+                         "placeholder": d["placeholder"]} for d in a["drivers"]],
             "related_categories": [{"category": c["category"], "wow": fmt_value("x_wow", c["wow"]),
                                     "wow_excluding_region": fmt_value("x_wow", c["wow_excl"]),
                                     "direction": _direction(c["wow"]), "placeholder": c["placeholder"]}
@@ -118,10 +133,12 @@ def anomaly_inputs(kpis: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 PLACEHOLDER_HELP = (
-    "占位符格式 {{键}}。常用键：total.sales / total.sales_prev / total.sales_wow / total.qty / total.qty_wow / "
-    "total.orders / total.atv / total.atv_wow / total.stores；region.<区域>.sales|sales_wow|share；"
-    "store.<门店>.sales|sales_wow；category.<品类>.sales|sales_wow|share；anomaly.<A1>.sales|sales_wow|impact。"
-    "跟在“增长/下降”后面时写 {{键|abs}}，去掉正负号。"
+    "占位符格式 {{键}}。常用键：total.sales（实收）/ total.sales_prev / total.sales_wow / total.gross_margin（毛利率）/ "
+    "total.delivery_share（外卖占比）/ total.target / total.target_rate（目标达成率）/ total.qty / total.stores；"
+    "region.<区域>.sales|sales_wow|share|gross_margin|target_rate；store.<门店>.sales|sales_wow；"
+    "category.<品类>.sales|sales_wow|share|gross_margin；item.<单品>.sales|sales_wow|share；"
+    "rc.<区域>.<品类>.gross_margin|gross_margin_prev|gross_margin_chg；anomaly.<A1>.sales|sales_wow|impact。"
+    "*_chg 是比率的变动（百分点）。跟在“增长/下降”后面时写 {{键|abs}}，去掉正负号。没有的指标（如客单价、同比）不要写。"
 )
 
 
@@ -140,21 +157,32 @@ def action_items(minutes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def placeholder_table(kpis: dict[str, Any]) -> dict[str, str]:
-    """写作常用的占位符及其当前值，直接给模型，免去逐个 query_kpi 查询。门店只给环比最高 / 最低各 3 家及异常相关门店。"""
+    """写作常用的占位符及其当前值，直接给模型，免去逐个 query_kpi 查询。
+    门店只给环比最高 / 最低各 3 家、环比超阈值及异常相关的门店；区域×品类只给异常或毛利率明显变动的组合。"""
     from .render import anomaly_flat
     flat = anomaly_flat(kpis)
     stores = sorted((r for r in kpis["tables"]["store"] if r["sales_wow"] is not None), key=lambda r: r["sales_wow"])
     keep_stores = {r["name"] for r in stores[:3] + stores[-3:]}
     keep_stores |= {d["store"] for a in kpis["anomalies"] for d in a["drivers"]}
+    keep_stores |= {r["name"] for r in stores if abs(r["sales_wow"]) > kpis["threshold"]}
+    shifted = {m["placeholder"].rsplit(".", 1)[0] for m in kpis.get("margin_shifts", [])}
     out = {}
     for k, v in flat.items():
         head = k.split(".")[0]
         if head == "store" and k.split(".")[1] not in keep_stores:
             continue
-        if head == "rc" and not any(a["dimension"] == "rc" and k.startswith(f"rc.{a['entity']}.") for a in kpis["anomalies"]):
+        if head == "rc" and not any(a["dimension"] == "rc" and k.startswith(f"rc.{a['entity']}.") for a in kpis["anomalies"]) \
+                and k.rsplit(".", 1)[0] not in shifted:
+            continue
+        if head == "rc" and k.rsplit(".", 1)[-1].startswith("gross_margin"):
+            out[k] = fmt_value(k, v)
+            continue
+        if head == "item" and k.split(".")[1] not in kpis.get("top_items", []):
             continue
         if k.rsplit(".", 1)[-1] in ("sales", "sales_prev", "sales_wow", "share", "qty", "qty_wow", "orders",
-                                     "orders_wow", "atv", "atv_wow", "stores", "impact"):
+                                     "orders_wow", "atv", "atv_wow", "stores", "impact", "gross_margin",
+                                     "gross_margin_prev", "gross_margin_chg", "delivery_share", "target",
+                                     "target_rate"):
             out[k] = fmt_value(k, v)
     return out
 

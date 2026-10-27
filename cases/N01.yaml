@@ -2,6 +2,7 @@ id: N01
 name: 正常周报 + 审核退回后按意见重做（赛题场景 1）
 category: 正常
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
 steps:

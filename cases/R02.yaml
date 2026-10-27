@@ -2,6 +2,7 @@ id: R02
 name: 连续退回超过上限 → 转线下沟通 → 重试回到待审核 → 通过
 category: 审核流转
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
 steps:

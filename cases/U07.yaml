@@ -2,6 +2,7 @@ id: U07
 name: 同时缺周会纪要和上周数据 → 一次性列出全部问题
 category: 缺材料
 input:
+  employee: weekly_report_demo
   period: 2026-W44
   files: {sales_file: data/user_cases/case_02_missing_last_week/销售明细_2026W44_单周.xlsx}
 steps:

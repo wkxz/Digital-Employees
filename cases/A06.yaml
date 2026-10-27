@@ -1,0 +1,10 @@
+id: A06
+name: 纪要周次与统计周期不一致 → 暂停，请上传对应周的纪要
+category: 边界
+input:
+  period: 2026-W44
+  files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/official_a/周会纪要_2026W43.docx}
+steps:
+  - expect: {state: WAITING_INPUT, pause_contains: 上传的周会纪要是2026 年第 43 周的}
+  - supplement: {files: {minutes_file: data/official_a/周会纪要_2026W44.docx}}
+  - expect: {state: PENDING_REVIEW}

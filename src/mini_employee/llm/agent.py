@@ -53,7 +53,7 @@ def run_agent_step(llm: LLM, gateway: Any, emit: Emit, *, step_id: str, purpose:
         last_turn = turn == max_turns and max_turns > 1
         if last_turn:  # 最后一轮：收回工具，要求基于已有信息直接给出结果，而不是继续检索
             messages.append({"role": "user", "content": "已到本步骤的最后一轮。不要再调用工具，请基于已获得的信息立即输出最终 JSON；"
-                                                        "没有依据的原因写“原因待确认”。"})
+                                                        "没有依据的原因按岗位说明标注待核实。"})
         c0 = time.monotonic()
         resp = llm.chat(messages, [] if last_turn else tool_defs, {**meta, "turn": turn, "wrap_up": last_turn})
         ms = int((time.monotonic() - c0) * 1000)

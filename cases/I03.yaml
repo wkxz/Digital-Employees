@@ -2,6 +2,7 @@ id: I03
 name: 统计周期超出数据范围（未来周）→ 暂停并说明数据实际覆盖的日期
 category: 不合规
 input:
+  employee: weekly_report_demo
   period: 2026-W50
   files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
 steps:
