@@ -44,7 +44,7 @@ def read_table(path: Path) -> pd.DataFrame:
 
 
 def read_master(path: Path | None) -> dict[str, pd.DataFrame]:
-    """员工配置自带的主数据（门店信息、商品信息、销售目标），只上传 CSV 明细时用它关联区域、品类和目标。"""
+    """主数据工作簿（门店信息、商品信息、销售目标）：发起人上传的，或员工配置自带的。"""
     if path is None or not path.exists():
         return {}
     return pd.read_excel(path, sheet_name=None)
@@ -133,19 +133,32 @@ def find_pii(df: pd.DataFrame) -> list[str]:
     return hits
 
 
+MASTER_ORIGIN = {"upload": "上传的主数据文件", "sales": "销售明细中的同名工作表", "builtin": "员工配置自带的主数据"}
+
+
+def master_origins(data_cfg: dict[str, Any], layers: dict[str, dict[str, pd.DataFrame]]) -> dict[str, str]:
+    """主数据各工作表实际取自哪里（layers 按优先级从高到低排列）。"""
+    names = [lk["sheet"] for lk in data_cfg.get("lookups", [])] + \
+            ([data_cfg["targets"]["sheet"]] if data_cfg.get("targets") else [])
+    return {n: next((MASTER_ORIGIN[k] for k, s in layers.items() if n in s), "未提供") for n in names}
+
+
 def load_sales(path: Path, aliases: dict[str, list[str]], required: list[str],
                data_cfg: dict[str, Any] | None = None, master: dict[str, pd.DataFrame] | None = None,
-               ) -> tuple[pd.DataFrame, dict[str, Any]]:
+               upload: dict[str, pd.DataFrame] | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """master：员工配置自带的主数据；upload：发起人上传的主数据文件。按工作表取用，
+    优先级：上传的主数据文件 > 销售明细 xlsx 中的同名工作表 > 员工配置自带的（门店新开、目标调整时上传新表即可）。"""
     data_cfg = data_cfg or {}
     raw, sheets = read_book(path, data_cfg.get("sheet"))
     df, mapping = normalize_columns(raw, aliases)
-    sources = {**(master or {}), **sheets}  # 上传文件自带的主数据优先于员工配置自带的
+    sources = {**(master or {}), **sheets, **(upload or {})}
     df, joined = apply_lookups(df, data_cfg.get("lookups", []), sources)
     missing = [c for c in required if c not in df.columns]
     info: dict[str, Any] = {
         "rows": int(len(df)), "columns": [str(c) for c in raw.columns], "alias_mapping": mapping,
         "missing_columns": missing, "pii_columns": find_pii(raw), "lookups": joined,
         "targets": read_targets(data_cfg.get("targets"), sources),
+        "master_origin": master_origins(data_cfg, {"upload": upload or {}, "sales": sheets, "builtin": master or {}}),
     }
     if not missing:
         dates = pd.to_datetime(df["日期"], errors="coerce").dropna()
@@ -161,12 +174,12 @@ KEY = ["日期", "门店", "品类"]
 
 def load_sales_many(paths: list[Path], aliases: dict[str, list[str]], required: list[str],
                     data_cfg: dict[str, Any] | None = None, master: dict[str, pd.DataFrame] | None = None,
-                    ) -> tuple[pd.DataFrame, dict[str, Any]]:
+                    upload: dict[str, pd.DataFrame] | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
     """读取并合并多份销售明细（如先传本周、再补传上周）。各文件分别识别列名；
     同一 日期+门店+品类 在多份文件中都出现时，以后上传的文件为准（补传更正版即可覆盖）。"""
     loaded = []
     for i, p in enumerate(paths):
-        df, info = load_sales(p, aliases, required, data_cfg, master)
+        df, info = load_sales(p, aliases, required, data_cfg, master, upload)
         df["_src"] = i
         dates = set(pd.to_datetime(df["日期"], errors="coerce").dropna().dt.date) if "日期" in df.columns else set()
         loaded.append((p, df, info, dates))
@@ -204,6 +217,7 @@ def load_sales_many(paths: list[Path], aliases: dict[str, list[str]], required: 
         "lookups": {k: v for inf in infos for k, v in inf["lookups"].items() if k != "joined"}
         | {"joined": list(dict.fromkeys(j for inf in infos for j in inf["lookups"]["joined"]))},
         "targets": next((inf["targets"] for inf in reversed(infos) if inf["targets"]), []),
+        "master_origin": infos[-1]["master_origin"],  # 上传的主数据对每份明细都一样；明细自带的工作表以后上传的为准
     }
     if not missing:
         dates = pd.to_datetime(df["日期"], errors="coerce").dropna()

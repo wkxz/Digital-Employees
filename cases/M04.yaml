@@ -2,10 +2,9 @@ id: M04
 name: 执行中发现本周数据不完整 → 暂停待补 → 补充后从断点继续
 category: 缺材料
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/fixtures/销售明细_本周不完整.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  files: {sales_file: data/fixtures/销售明细_本周不完整.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
 steps:
   - expect: {state: WAITING_INPUT, pause_contains: [第 2/7 步, "2026-10-30"]}
-  - supplement: {files: {sales_file: data/samples/销售明细_2026W44.xlsx}}
+  - supplement: {files: {sales_file: data/official_a/销售明细.xlsx}}
   - expect: {state: PENDING_REVIEW, step_runs: {minutes: 1}}

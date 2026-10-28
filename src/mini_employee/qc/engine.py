@@ -82,7 +82,7 @@ def _mask(s: str) -> str:
     return "*" * len(s)
 
 
-_CLAUSE_SPLIT = re.compile(r"([，,；;。！？\n])")
+_CLAUSE_SPLIT = re.compile(r"([，；;。！？\n]|,(?!\d{3}))")  # 千分位逗号（573,635）不断句
 _TOTAL_WORDS = ("整体", "总", "合计", "全部", "大盘", "全公司")
 
 

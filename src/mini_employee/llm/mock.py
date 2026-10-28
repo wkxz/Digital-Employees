@@ -323,8 +323,13 @@ class MockLLM:
             if not sentence:
                 continue
             for t in targets[:1] or ["overall"]:
-                if t != "anomalies" and not any(kw in s for s in content[t]):
+                if t == "anomalies":
+                    continue
+                hit = next((i for i, s in enumerate(content[t]) if kw in s), None)
+                if hit is None:
                     content[t].append(sentence)
+                elif "按审核意见" not in content[t][hit]:  # 已提到该对象：在原句上细化，而不是原样保留
+                    content[t][hit] = content[t][hit].rstrip("。") + f"；按审核意见细化{kw}的具体措施、负责人和完成时间。"
 
     # ------------------------------------------------------------ 质检修正
     def _fix(self, p: dict) -> dict:

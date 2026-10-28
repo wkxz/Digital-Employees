@@ -35,7 +35,7 @@ def test_only_qc_pass_leads_to_review():
 
 def test_illegal_transition_is_rejected_and_logged():
     st = Store()
-    tid = st.create_task("weekly_report_demo", {})
+    tid = st.create_task("weekly_report", {})
     with pytest.raises(IllegalTransition):
         st.transition(tid, "approve", REVIEWER)
     assert st.get(tid)["state"] == S.CREATED
@@ -45,7 +45,7 @@ def test_illegal_transition_is_rejected_and_logged():
 def test_optimistic_lock():
     from mini_employee.store import ConcurrentUpdate
     st = Store()
-    tid = st.create_task("weekly_report_demo", {})
+    tid = st.create_task("weekly_report", {})
     rv = st.get(tid)["row_version"]
     st.update(tid, expect_row_version=rv, pause_reason="a")
     with pytest.raises(ConcurrentUpdate):
@@ -60,12 +60,11 @@ def test_region_sum_equals_total(kpis):
     assert regions == pytest.approx(f["total.sales"])
 
 
-def test_planted_anomalies_detected(kpis):
+def test_official_anomalies_detected(kpis):
     labels = [a["label"] for a in kpis["anomalies"]]
-    assert labels[0] == "华东区"
-    assert {"华南区生鲜", "北京海淀店", "西南区饮料"} <= set(labels)
+    assert labels[:2] == ["华东区", "华南区"]  # 按影响金额排序
     east = kpis["anomalies"][0]
-    assert {d["store"] for d in east["drivers"]} == {"上海徐汇店", "上海浦东店"}
+    assert {d["store"] for d in east["drivers"]} == {"上海静安店", "杭州湖滨店"}
 
 
 def test_week_parsing_and_cross_year():
@@ -113,7 +112,7 @@ def test_hardcoded_number_replaced_by_program(kpis):
     from mini_employee.qc.engine import program_fix
     from mini_employee.qc.rules import data_consistency
     from mini_employee.render import anomaly_flat
-    content = {"summary": ["华东区环比下降 20.0%。"]}
+    content = {"summary": ["本周全公司实收 573,635 元。"]}
     ok, details, _ = data_consistency(_ctx(kpis, content), {})
     assert not ok
     fixed, actions, remaining = program_fix(content, [{"rule": "data_consistency", "details": details}],
@@ -135,7 +134,7 @@ def test_cause_without_evidence_must_say_pending(kpis):
 def test_feedback_parsing(kpis):
     from mini_employee.config import load_employee
     from mini_employee.payloads import parse_feedback
-    cfg = load_employee("weekly_report_demo").raw["feedback"]
+    cfg = load_employee("weekly_report").raw["feedback"]
     todos = parse_feedback("华东区下滑原因没说清楚，请结合周会纪要补充；摘要改为3条", cfg, kpis)
     assert todos[0]["section"] == "anomalies" and "华东" in todos[0]["keywords"]
     assert todos[1]["section"] == "summary" and todos[1]["max_items"] == 3
@@ -200,7 +199,7 @@ def test_idempotent_write_does_not_duplicate(tmp_path):
 # ---------------------------------------------------------------- 端到端
 
 def test_end_to_end_with_rework(orch, sample_files):
-    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files)
+    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files)
     assert orch.drive(tid) == S.PENDING_REVIEW
     orch.review(tid, "changes", "华东区下滑原因没说清楚，请结合周会纪要补充")
     t = orch.store.get(tid)

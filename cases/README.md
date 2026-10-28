@@ -1,5 +1,7 @@
 # 自测用例
 
+数据：`data/official_a/` 为官方数据；`data/fixtures/` 为 `scripts/make_fixtures.py` 从官方数据生成的变体（平稳周、列名别名、跨年周、脏数据、含手机号、缺列、本周不完整、Markdown 纪要、只含销售目标的主数据等）。
+
 每个 `*.yaml` 是一条用例，`make cases` 或 `uv run mini cases` 批量运行，结果写入 `reports/case_report.md`；
 `uv run pytest` 也会把全部用例作为测试运行。
 
@@ -14,7 +16,7 @@ crash_after: analysis                     # 可选：在该步骤完成后强制
 input:
   period: 2026-W44
   fields: {focus_region: 华东}            # 其他表单字段
-  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: ...}
+  files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: ..., master_file: ...}  # master_file 可选
   faults: [{tool: search_minutes, mode: timeout, times: 2}]   # 故障注入
 steps:                                    # 依次执行
   - expect: {state: PENDING_REVIEW, report_contains: [...]}

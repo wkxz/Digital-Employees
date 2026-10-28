@@ -2,8 +2,7 @@ id: B01
 name: 本周无异常波动
 category: 边界
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/fixtures/销售明细_平稳周.xlsx, minutes_file: data/fixtures/周会纪要_平稳周.docx}
+  files: {sales_file: data/fixtures/销售明细_平稳周.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
 steps:
   - expect: {state: PENDING_REVIEW, report_contains: [波动均在正常范围内]}

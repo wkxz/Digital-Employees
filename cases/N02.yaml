@@ -2,7 +2,6 @@ id: N02
 name: CSV 销售数据 + Markdown 纪要 + 重点关注区域
 category: 正常
 input:
-  employee: weekly_report_demo
   period: 2026-W44
   fields: {focus_region: 华东}
   files: {sales_file: data/fixtures/销售明细_2026W44.csv, minutes_file: data/fixtures/周会纪要_2026W44.md}

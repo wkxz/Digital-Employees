@@ -140,7 +140,7 @@ def data_consistency(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
                 details.append({"type": "sign_after_word", "section": sid, "index": i, "field": fld,
                                 "text": m.group(0), "key": key,
                                 "msg": f"“{m.group(1)}”后的 {{{{{key}}}}} 会带正负号，应写 {{{{{key}|abs}}}}"})
-        for clause in re.split(r"[，,；;。！？\n]", text):
+        for clause in re.split(r"[，；;。！？\n]|,(?!\d{3})", text):  # 千分位逗号不断句
             keys = [k for k in find_keys(clause) if k.endswith("_wow")]
             vals = [ctx.flat.get(k) for k in keys]
             vals = [v for v in vals if v is not None and abs(v) >= 0.005]

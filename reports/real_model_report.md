@@ -1,5 +1,7 @@
 # 真实模型验证报告
 
+> 本报告运行于 2026-10-27，早于用例迁移：当时还包含旧样例结构的用例（U01–U11 等），之后旧样例结构已删除，系统行为用例改用官方数据（见 `reports/case_report.md`）。
+
 ## 1. 全量用例（deepseek-flash，2026-10-27）
 
 - 模型：`openai_compatible / deepseek-flash`（DeepSeek 官方接口），代码版本为本报告所在提交。

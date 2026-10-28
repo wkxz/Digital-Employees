@@ -2,16 +2,15 @@ id: N01
 name: 正常周报 + 审核退回后按意见重做（赛题场景 1）
 category: 正常
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
 steps:
   - expect:
       state: PENDING_REVIEW
-      report_contains: [华东区, 上海徐汇店, 生鲜周, 西南区饮料, 原因待确认, 核心指标, 门店环比 Top / Bottom]
+      report_contains: [华东区, 上海静安店（SH02, 杭州湖滨店（HZ01, 核心指标, 本周实收前 5 名单品, 五、数据质量说明]
       report_not_contains: ["{{", "环比下降 -"]
   - review: {decision: changes, comments: 华东区下滑原因没说清楚，请结合周会纪要补充}
-  - expect: {state: PENDING_REVIEW, version: 2, report_contains: [竞品社区超市], events: [feedback_parsed]}
+  - expect: {state: PENDING_REVIEW, version: 2, report_contains: [买一送一], events: [feedback_parsed]}
   - review: {decision: approve}
   - expect:
       state: DELIVERED

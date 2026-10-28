@@ -1,9 +1,8 @@
 id: B02
-name: 列名不同（金额 / 大区 / 类别）按别名自动识别
+name: 列名全部换成别名（交易日期 / 店名 / 件数 / 营业额 / 流水号）→ 自动识别，结果与原数据一致
 category: 边界
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/fixtures/销售明细_别名列.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  files: {sales_file: data/fixtures/销售明细_别名列.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
 steps:
-  - expect: {state: PENDING_REVIEW, report_contains: [列名识别, “金额”按“销售额”处理]}
+  - expect: {state: PENDING_REVIEW, report_contains: ["573,635 元", "61.1%", "31.8%"]}

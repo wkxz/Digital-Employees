@@ -15,6 +15,8 @@ form:
   - {key: period, label: 统计周期, type: iso_week, required: true, help: "如 2026-W44 或 2026年第44周"}
   - {key: sales_file, label: 销售明细, type: file, ext: [xlsx, csv], required: true, multiple: true}  # 可分多份上传，补充材料时追加
   - {key: minutes_file, label: 周会纪要, type: file, ext: [docx, md], required: true}
+  - {key: master_file, label: 主数据, type: file, ext: [xlsx], required: false,
+     help: "可选：门店信息、商品信息、销售目标工作表（可只含其中几张）。门店新开或目标调整时上传，优先于系统自带的主数据"}
   - {key: focus_region, label: 重点关注区域, type: enum, options: [华东, 华南, 华北, 西南], required: false,
      guide: "在“核心指标”中单独写一句该区域的实收、环比和目标达成率", section: overall}
   # 现场变更示例（纯配置加字段）：type 可选 string / enum；字段会出现在发起页，并连同 guide 一起交给模型。
@@ -26,7 +28,7 @@ form:
 
 # ---------------------------------------------------------------- 数据结构
 # 明细里只有门店编码、商品编码时，按编码从主数据补齐区域、品类等列；明细里已有这些列时不关联。
-# 主数据优先取上传 xlsx 中的同名工作表，没有时（如只上传 CSV）用 master_file（放在本目录）。
+# 主数据按工作表取用，优先级：表单“主数据”上传的文件 > 销售明细 xlsx 中的同名工作表 > master_file（放在本目录，兜底）。
 data:
   sheet: 销售明细                # xlsx 中明细所在的工作表，找不到时读第一个
   master_file: master.xlsx
@@ -81,6 +83,7 @@ steps:
       max_bad_ratio: $admission.max_bad_row_ratio
       data_config: $data
       master_file: work/master.xlsx
+      master_upload: $form.master_file
   - id: kpi
     name: 计算指标与识别异常
     type: tool

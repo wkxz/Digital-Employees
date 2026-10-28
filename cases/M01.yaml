@@ -2,10 +2,9 @@ id: M01
 name: 缺周会纪要 → 暂停待补 → 补充后继续
 category: 缺材料
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/samples/销售明细_2026W44.xlsx}
+  files: {sales_file: data/official_a/销售明细.xlsx}
 steps:
   - expect: {state: WAITING_INPUT, pause_contains: 缺少材料：周会纪要}
-  - supplement: {files: {minutes_file: data/samples/周会纪要_2026W44.docx}}
+  - supplement: {files: {minutes_file: data/official_a/周会纪要_2026W44.docx}}
   - expect: {state: PENDING_REVIEW}

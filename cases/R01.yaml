@@ -2,9 +2,8 @@ id: R01
 name: 非法流转与越权审核被拒绝并留痕
 category: 审核流转
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
 steps:
   - expect: {state: PENDING_REVIEW}
   - illegal: {event: approve, actor: initiator}

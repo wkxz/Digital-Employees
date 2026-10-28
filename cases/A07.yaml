@@ -1,0 +1,24 @@
+id: A07
+name: 只上传 CSV 明细 + 附带主数据文件（只含调整后的销售目标）→ 目标按上传的计算，门店、商品仍取自员工配置自带的主数据
+category: 正常
+# 主数据_目标调整.xlsx 由 scripts/make_fixtures.py 生成：只有“销售目标”工作表，华东第 44 周目标由 235,000 调为 205,000 元
+input:
+  period: 2026-W44
+  files: {sales_file: data/official_a/销售明细.csv, minutes_file: data/official_a/周会纪要_2026W44.docx,
+          master_file: data/fixtures/主数据_目标调整.xlsx}
+steps:
+  - expect:
+      state: PENDING_REVIEW
+      kpis:
+        total.sales: 573634.87
+        region.华东.target: 205000
+        region.华东.target_rate: 0.963990
+        region.华南.target_rate: 0.923471
+      report_contains:
+        - 96.4%
+        - 92.3%
+        - 销售目标取自上传的主数据文件
+        - 门店信息、商品信息取自员工配置自带的主数据
+        - 主数据_目标调整.xlsx
+      report_not_contains: ["{{"]
+      qc_all_blocking_passed: true

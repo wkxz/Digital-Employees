@@ -19,7 +19,7 @@ def edit_employee(tmp_path, monkeypatch):
     base = tmp_path / "employees"
     shutil.copytree(ROOT / "employees", base)
     monkeypatch.setattr(C, "EMPLOYEES_DIR", base)
-    path = base / "weekly_report_demo" / "employee.yaml"
+    path = base / "weekly_report" / "employee.yaml"
 
     def edit(fn):
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -29,7 +29,7 @@ def edit_employee(tmp_path, monkeypatch):
 
 
 def _run(orch, sample_files, **fields):
-    tid = orch.create("weekly_report_demo", {"period": "2026-W44", **fields}, sample_files)
+    tid = orch.create("weekly_report", {"period": "2026-W44", **fields}, sample_files)
     return tid, orch.drive(tid)
 
 
@@ -143,19 +143,19 @@ def test_config_mistakes_are_reported(edit_employee, change, expected):
     from mini_employee.validate import ConfigError
     edit_employee(change)
     with pytest.raises(ConfigError) as e:
-        load_employee("weekly_report_demo")
+        load_employee("weekly_report")
     assert any(expected in x for x in e.value.errors), e.value.errors
-    assert check_config("weekly_report_demo") == 4
+    assert check_config("weekly_report") == 4
 
 
 def test_current_config_is_valid(capsys):
     from mini_employee.cli import check_config
-    assert check_config("weekly_report_demo") == 0
+    assert check_config("weekly_report") == 0
     assert "校验通过" in capsys.readouterr().out
 
 
 def test_config_broken_mid_task_pauses_with_reason(edit_employee, orch, sample_files):
-    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files, {"faults": [{"tool": "llm", "mode": "timeout"}]})
+    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files, {"faults": [{"tool": "llm", "mode": "timeout"}]})
     assert orch.drive(tid) == S.SUSPENDED  # 执行到一半暂停
     edit_employee(lambda r: r["quality_checks"].append({"rule": "no_such_rule"}))  # 期间有人把配置改错了
     assert orch.retry(tid, clear_faults=True) == S.SUSPENDED
@@ -165,18 +165,24 @@ def test_config_broken_mid_task_pauses_with_reason(edit_employee, orch, sample_f
 
 # ---------------------------------------------------------------- 现场演练：企业数据列名不同，只加别名
 
-def test_live_alias_change_makes_renamed_columns_work(edit_employee, orch):
-    d = ROOT / "data" / "user_cases" / "case_06_column_alias"
-    files = {"sales_file": str(d / "销售明细_别名列.xlsx"), "minutes_file": str(d / "周会纪要_2026W44.docx")}
+def test_live_alias_change_makes_renamed_columns_work(edit_employee, orch, tmp_path):
+    import pandas as pd
+    src = ROOT / "data" / "official_a"
+    book = pd.read_excel(src / "销售明细.xlsx", sheet_name=None)
+    book["销售明细"] = book["销售明细"].rename(columns={"门店名称": "网点名称", "实收金额": "成交金额"})
+    renamed = tmp_path / "销售明细_新列名.xlsx"
+    with pd.ExcelWriter(renamed) as w:
+        for k, v in book.items():
+            v.to_excel(w, sheet_name=k, index=False)
+    files = {"sales_file": str(renamed), "minutes_file": str(src / "周会纪要_2026W44.docx")}
     _, state = _run(orch, files)
     assert state == S.WAITING_INPUT  # 改配置前：列名不认识，暂停
 
     def add(r):
         al = r["admission"]["column_aliases"]
         al["门店"].append("网点名称")
-        al["品类"].append("商品类别")
         al["销售额"].append("成交金额")
     edit_employee(add)
     tid, state = _run(orch, files)
     assert state == S.PENDING_REVIEW
-    assert "“网点名称”按“门店”处理" in _text(orch, tid)
+    assert "573,635 元" in _text(orch, tid)  # 与原列名的数据结果一致

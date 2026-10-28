@@ -3,9 +3,8 @@ name: 执行中强制结束程序 → 重启后从断点继续，结果与一次
 category: 断点恢复
 crash_after: analysis
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
 steps:
   - expect: {state: PENDING_REVIEW, events: [task_resumed, step_skipped], step_runs: {load: 1, analysis: 1, draft: 1}}
   - compare_with_clean_run: {}

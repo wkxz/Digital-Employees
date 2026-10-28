@@ -1,9 +1,8 @@
 id: B04
-name: 少量脏数据（重复 / 空值 / 负数 < 5%）清洗后继续，并在附录说明
+name: 少量脏数据（重复 / 空值 / 非退货负数 < 5%）清洗后继续，并在数据质量说明中列出
 category: 边界
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/fixtures/销售明细_少量脏数据.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  files: {sales_file: data/fixtures/销售明细_少量脏数据.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
 steps:
-  - expect: {state: PENDING_REVIEW, report_contains: [剔除重复]}
+  - expect: {state: PENDING_REVIEW, report_contains: [其他清洗：本周及上周共 60 行, 销售额为空，整行剔除, 记录ID 重复 29 条]}

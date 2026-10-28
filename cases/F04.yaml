@@ -3,9 +3,8 @@ name: 模型反复调用工具不收尾 → 超过轮次上限暂停
 category: 故障
 mock_only: true   # 依赖 Mock 模型注入的错误
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
   faults: [{tool: mock, mode: loop_tools}]
 steps:
   - expect: {state: SUSPENDED, pause_contains: 轮次上限}

@@ -257,7 +257,8 @@ class Orchestrator:
                     "file_paths": have("sales_file"), "period": task["form"]["period"],
                     "required_columns": adm["required_columns"], "column_aliases": adm["column_aliases"],
                     "max_bad_ratio": adm["max_bad_row_ratio"], "strict": False,
-                    "data_config": emp.raw.get("data"), "master_file": master}, allowed=emp.tools, step_id="admission")
+                    "data_config": emp.raw.get("data"), "master_file": master,
+                    "master_upload": (have("master_file") or [None])[0]}, allowed=emp.tools, step_id="admission")
             if have("minutes_file"):
                 try:
                     minutes = gw.call("read_minutes", {"file_path": task["form"]["minutes_file"]}, allowed=emp.tools,
@@ -431,6 +432,7 @@ class Orchestrator:
                 "cleaning": load.get("cleaning", {}), "alias_mapping": load.get("alias_mapping", {}),
                 "overridden_rows": load.get("overridden_rows", 0), "superseded_files": load.get("superseded_files", []),
                 "redacted_columns": load.get("redacted_columns", []), "minutes_masked": minutes.get("masked", 0),
+                "master_origin": load.get("master_origin", {}),
                 "footer": emp.report.get("footer", "")}
 
     def _render(self, task: dict, emp: Employee, gw: ToolGateway, content: dict, version: int, tag: str,

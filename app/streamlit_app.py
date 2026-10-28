@@ -160,15 +160,15 @@ if page == "发起任务":
                 values[fld["key"]] = st.selectbox(label, [""] + fld["options"])
             else:
                 values[fld["key"]] = st.text_input(label, help=fld.get("help"), placeholder=fld.get("help", ""))
-        use_sample = st.checkbox("未上传的文件使用内置样例数据（第 44 周）", value=False)
+        use_sample = st.checkbox("未上传的文件使用官方样例数据（第 44 周）", value=False)
         with st.expander("故障注入（演示用）"):
             fs = st.multiselect("本任务注入的故障", ["search_minutes:timeout", "read_minutes:timeout", "llm:timeout",
                                                  "mock:direction_error", "mock:hardcode_number", "mock:forbidden_tool",
                                                  "mock:loop_tools"])
         submitted = st.form_submit_button("提交任务", type="primary")
     if submitted:
-        sample = {"sales_file": ROOT / "data/samples/销售明细_2026W44.xlsx",
-                  "minutes_file": ROOT / "data/samples/周会纪要_2026W44.docx"}
+        sample = {"sales_file": ROOT / "data/official_a/销售明细.xlsx",
+                  "minutes_file": ROOT / "data/official_a/周会纪要_2026W44.docx"}
         paths = {}
         for k, f in files.items():
             if isinstance(f, list) and f:

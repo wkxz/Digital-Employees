@@ -8,8 +8,8 @@ export MINI_TODAY ?= 2026-11-03
 install:            ## 安装依赖（需要 uv：https://docs.astral.sh/uv/）
 	$(UV) sync
 
-data:               ## 重新生成模拟数据
-	$(RUN) python scripts/make_sample_data.py
+data:               ## 从官方数据重新生成用例变体数据（data/fixtures）
+	$(RUN) python scripts/make_fixtures.py
 
 test:               ## 单元测试 + 全部用例
 	$(RUN) pytest -q

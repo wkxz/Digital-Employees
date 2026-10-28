@@ -2,9 +2,8 @@ id: F03
 name: 模型接口不可用（模拟断网）→ 暂停 → 恢复后继续
 category: 故障
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
   faults: [{tool: llm, mode: timeout}]
 steps:
   - expect: {state: SUSPENDED, pause_contains: 模型接口}

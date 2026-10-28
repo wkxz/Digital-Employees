@@ -2,11 +2,10 @@ id: R02
 name: 连续退回超过上限 → 转线下沟通 → 重试回到待审核 → 通过
 category: 审核流转
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/samples/周会纪要_2026W44.docx}
+  files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
 steps:
-  - review: {decision: changes, comments: 华南区生鲜增长原因请再展开}
+  - review: {decision: changes, comments: 华南区促销结束后的下滑原因请再展开}
   - review: {decision: changes, comments: 北京海淀店的情况请补充}
   - review: {decision: changes, comments: 下周建议请补充华东区措施}
   - expect: {state: PENDING_REVIEW, version: 4}

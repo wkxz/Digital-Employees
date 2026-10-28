@@ -53,7 +53,8 @@ def read_sales_data(
     max_bad_ratio: float = 0.05,
     strict: bool = True,
     data_config: Annotated[dict[str, Any] | None, Field(description="明细工作表名、主数据关联（lookups）、销售目标表")] = None,
-    master_file: Annotated[str | None, Field(description="主数据文件（任务目录内相对路径），上传的文件没有主数据工作表时使用")] = None,
+    master_file: Annotated[str | None, Field(description="员工配置自带的主数据文件（任务目录内相对路径），优先级最低")] = None,
+    master_upload: Annotated[str | None, Field(description="发起人上传的主数据文件（任务目录内相对路径），优先级最高")] = None,
 ) -> dict[str, Any]:
     """读取、合并并清洗销售明细：识别列名别名、按编码关联门店 / 商品主数据、检查必需列、去重、剔除空值与非退货负数行。
     strict=True 时缺列或脏数据过多直接报缺材料。"""
@@ -63,7 +64,9 @@ def read_sales_data(
             raise ToolError(encode(MISSING_INPUT, f"找不到销售明细文件：{f}"))
     try:
         master = D.read_master(_inside(task_dir, master_file) if master_file else None)
-        df, info = D.load_sales_many(paths, column_aliases, required_columns, data_config, master)
+        upload = D.read_master(_inside(task_dir, master_upload)
+                               if master_upload and not master_upload.startswith("missing:") else None)
+        df, info = D.load_sales_many(paths, column_aliases, required_columns, data_config, master, upload)
     except D.DataError as e:
         raise _fail(e) from e
     targets = info.pop("targets", [])
@@ -71,7 +74,7 @@ def read_sales_data(
     if info["missing_columns"]:
         if info["lookups"].get("missing_sheets"):
             info["missing_hint"] = (f"未找到主数据工作表 {info['lookups']['missing_sheets']}，"
-                                    "请上传包含门店信息、商品信息工作表的 xlsx，或由管理员配置主数据文件")
+                                    "请在“主数据”中上传包含这些工作表的 xlsx，或上传包含这些工作表的销售明细 xlsx")
         if strict:
             raise ToolError(encode(MISSING_INPUT, f"销售明细缺少必需列 {info['missing_columns']}，"
                                                   f"文件实际列为 {info['columns']}"))

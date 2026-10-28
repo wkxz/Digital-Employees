@@ -27,12 +27,12 @@ def test_check_model(fake_server, capsys):
 def test_wrong_key_pauses_with_clear_reason(fake_server, monkeypatch, orch, sample_files):
     from mini_employee.states import S
     monkeypatch.setenv("MINI_API_KEY", "wrong")
-    tid = orch.create("weekly_report_demo", {"period": "2026-W44"}, sample_files)
+    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files)
     assert orch.drive(tid) == S.SUSPENDED
     assert "401" in orch.store.get(tid)["pause_reason"]
 
 
-@pytest.mark.parametrize("cid", ["N01", "U01", "F02", "C01"])
+@pytest.mark.parametrize("cid", ["N01", "A01", "F02", "C01"])
 def test_cases_over_http(fake_server, cid, tmp_path, monkeypatch):
     case = next(c for c in load_cases(["cases"]) if c["id"] == cid)
     monkeypatch.setenv("MINI_RUNS", "")

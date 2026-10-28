@@ -272,6 +272,21 @@ def _gap_reason(store: str, minutes: list[dict[str, Any]]) -> tuple[str, dict[st
     return "unknown", None
 
 
+def handling_lines(meta: dict[str, Any]) -> list[str]:
+    """对输入材料做过的处理（更正版替代、多份合并、隐私剔除 / 打码），数据质量说明与附录共用。"""
+    lines = []
+    if meta.get("superseded_files"):
+        lines.append(f"被后上传的更正版替代、未使用的文件：{'、'.join(meta['superseded_files'])}。")
+    if meta.get("overridden_rows"):
+        lines.append(f"多份数据合并：同一记录在多份文件中重复出现的 {meta['overridden_rows']} 行，以后上传的文件为准。")
+    if meta.get("redacted_columns"):
+        lines.append(f"隐私保护：销售明细中的“{'”“'.join(meta['redacted_columns'])}”含个人信息（手机号 / 身份证号），"
+                     "读取时已剔除或打码，不参与计算、不进入报告。")
+    if meta.get("minutes_masked"):
+        lines.append(f"隐私保护：周会纪要中 {meta['minutes_masked']} 处含手机号 / 身份证号的内容已打码后再交给模型处理。")
+    return lines
+
+
 def quality_lines(kpis: dict[str, Any], meta: dict[str, Any], minutes: list[dict[str, Any]]) -> list[str]:
     """数据质量说明（程序生成，数字精确）：退货、重复、缺数日期及原因、上周缺数对环比的影响、其他清洗处理。"""
     q = kpis.get("quality") or {}
@@ -326,9 +341,20 @@ def quality_lines(kpis: dict[str, Any], meta: dict[str, Any], minutes: list[dict
         lines.append("重复记录：本周及上周未发现重复上传的记录。")
     if not q.get("missing_days") and not q.get("missing_days_prev"):
         lines.append("缺数日期：本周及上周各门店营业日均有销售数据。")
+    lines += handling_lines(meta)
     lines.append(f"口径：实收 = 原价 − 折扣，退货为负数冲减；毛利率 = （实收 − 成本）÷ 实收；ISO 周（周一至周日），"
-                 f"环比基期 {kpis['prev_period']}；数据来源：{'、'.join(meta.get('sources', []))}。")
+                 f"环比基期 {kpis['prev_period']}；数据来源：{'、'.join(meta.get('sources', []))}"
+                 f"{_master_note(meta.get('master_origin') or {})}。")
     return lines
+
+
+def _master_note(origin: dict[str, str]) -> str:
+    """主数据各工作表的来源，如“；主数据：门店信息、商品信息取自员工配置自带的主数据，销售目标取自上传的主数据文件”。"""
+    by: dict[str, list[str]] = {}
+    for sheet, src in origin.items():
+        by.setdefault(src, []).append(sheet)
+    return "；主数据：" + "，".join(f"{'、'.join(v)}取自{k}" if k != "未提供" else f"{'、'.join(v)}未提供"
+                                for k, v in by.items()) if by else ""
 
 
 def _src_of(m: dict[str, Any]) -> str:
@@ -355,15 +381,7 @@ def appendix_lines(kpis: dict[str, Any], meta: dict[str, Any]) -> list[str]:
     if c.get("zero_sales_days"):
         lines.append("销售额为 0 的记录（已保留，多为停业）：" + "；".join(
             f"{store} {'、'.join(days)}" for store, days in c["zero_sales_days"].items()) + "。")
-    if meta.get("superseded_files"):
-        lines.append(f"被后上传的更正版替代、未使用的文件：{'、'.join(meta['superseded_files'])}。")
-    if meta.get("overridden_rows"):
-        lines.append(f"多份数据合并：同一日期、门店、品类在多份文件中重复出现的 {meta['overridden_rows']} 行，以后上传的文件为准。")
-    if meta.get("redacted_columns"):
-        lines.append(f"隐私保护：销售明细中的“{'”“'.join(meta['redacted_columns'])}”含个人信息（手机号 / 身份证号），"
-                     "读取时已剔除或打码，不参与计算、不进入报告。")
-    if meta.get("minutes_masked"):
-        lines.append(f"隐私保护：周会纪要中 {meta['minutes_masked']} 处含手机号 / 身份证号的内容已打码后再交给模型处理。")
+    lines += handling_lines(meta)
     if meta.get("alias_mapping"):
         lines.append("列名识别：" + "，".join(f"“{k}”按“{v}”处理" for k, v in meta["alias_mapping"].items()) + "。")
     return lines

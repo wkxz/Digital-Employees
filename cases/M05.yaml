@@ -2,10 +2,9 @@ id: M05
 name: 周会纪要为空 → 暂停待补
 category: 缺材料
 input:
-  employee: weekly_report_demo
   period: 2026-W44
-  files: {sales_file: data/samples/销售明细_2026W44.xlsx, minutes_file: data/fixtures/周会纪要_空白.docx}
+  files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/fixtures/周会纪要_空白.docx}
 steps:
   - expect: {state: WAITING_INPUT, pause_contains: 内容为空}
-  - supplement: {files: {minutes_file: data/samples/周会纪要_2026W44.docx}}
+  - supplement: {files: {minutes_file: data/official_a/周会纪要_2026W44.docx}}
   - expect: {state: PENDING_REVIEW}
