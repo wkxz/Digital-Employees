@@ -137,6 +137,15 @@ def test_signed_value_after_word_with_gap():
     assert not SIGNED_AFTER_WORD.search("环比下降 {{store.a.sales_wow|abs}}")
 
 
+def test_anomaly_threshold_may_be_written_directly():
+    from types import SimpleNamespace
+
+    from mini_employee.qc.rules import _is_threshold
+    ctx = SimpleNamespace(kpis={"threshold": 0.10})
+    assert _is_threshold(ctx, "10%") and _is_threshold(ctx, "10.0 %")
+    assert not _is_threshold(ctx, "-10%") and not _is_threshold(ctx, "12%")  # 带符号的是环比计算结果
+
+
 def test_missing_driver_stores_appended_by_program():
     from mini_employee.render import _label_drivers
     item = {"phenomenon": "华东五店同步下滑，主要受上海静安店拖累", "cause": "节后客流回落。", "suggestion": ""}

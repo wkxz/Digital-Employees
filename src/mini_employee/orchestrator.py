@@ -27,7 +27,7 @@ from .store import IllegalTransition, Store
 from .tools import server as tool_server
 from .tools.errors import INTERNAL, INVALID_INPUT, MISSING_INPUT, ToolDenied, ToolFailure
 from .tools.gateway import ToolGateway, load_faults
-from .validate import ConfigError
+from .validate import FIX_DEFAULT, FIX_SKILL_SECTIONS, ConfigError
 
 
 class Orchestrator:
@@ -578,8 +578,8 @@ class Orchestrator:
                 try:
                     content = run_agent_step(
                         llm, gw, self._emit(tid), step_id="fix", purpose="fix",
-                        system=emp.skill("岗位职责", "撰写周报", "注意事项") +
-                        "\n\n## 质检修正\n根据 failures 中列出的问题修改 content，只改有问题的句子，其余保持不变，输出完整的 content。",
+                        system=emp.skill(*FIX_SKILL_SECTIONS) +
+                        ("" if "质检修正" in emp.skill_sections else f"\n\n## 质检修正\n{FIX_DEFAULT}"),
                         payload={"content": content, "failures": remaining, "overview": overview(kpis),
                                            "placeholders": placeholder_table(kpis), "placeholders_help": PLACEHOLDER_HELP},
                         tools=["query_kpi"], output_schema=output_schema("fix", emp.report),

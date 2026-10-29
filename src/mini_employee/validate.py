@@ -19,7 +19,8 @@ PROVIDERS = {"mock", "openai_compatible", "deepseek", "qwen", "glm"}
 TABLES = {"kpi_overall", "region_table", "store_rank", "category_table", "top_items", "anomaly_table"}
 LIMITS = ("max_model_turns_per_step", "max_step_seconds", "max_task_seconds", "tool_max_retries",
           "qc_max_fix_rounds", "rework_max_rounds")
-FIX_SKILL_SECTIONS = ("岗位职责", "撰写周报", "注意事项")  # 自动修正步骤固定使用
+FIX_SKILL_SECTIONS = ("岗位职责", "撰写周报", "注意事项", "质检修正")  # 自动修正步骤固定使用
+FIX_DEFAULT = "根据 failures 中列出的问题修改 content，只改有问题的句子，其余保持不变，输出完整的 content。"  # SKILL.md 没有“质检修正”时使用
 META_KEYS = {"period", "period_compact", "period_label", "version", "generated_at", "sources"}  # 渲染时可引用的内置字段
 
 

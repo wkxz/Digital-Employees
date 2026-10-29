@@ -168,7 +168,7 @@ def test_config_broken_mid_task_pauses_with_reason(edit_employee, orch, sample_f
 def test_live_alias_change_makes_renamed_columns_work(edit_employee, orch, tmp_path):
     import pandas as pd
     src = ROOT / "data" / "official_a"
-    book = pd.read_excel(src / "销售明细.xlsx", sheet_name=None)
+    book = pd.read_excel(src / "销售明细.xlsx", sheet_name=None, engine="calamine")
     book["销售明细"] = book["销售明细"].rename(columns={"门店名称": "网点名称", "实收金额": "成交金额"})
     renamed = tmp_path / "销售明细_新列名.xlsx"
     with pd.ExcelWriter(renamed) as w:

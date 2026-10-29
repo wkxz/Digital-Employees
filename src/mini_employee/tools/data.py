@@ -27,7 +27,7 @@ def read_book(path: Path, sheet: str | None = None) -> tuple[pd.DataFrame, dict[
     其他工作表（门店信息、商品信息、销售目标等主数据）一并返回，供关联使用。"""
     ext = path.suffix.lower()
     if ext in (".xlsx", ".xls"):
-        book = pd.read_excel(path, sheet_name=None)
+        book = pd.read_excel(path, sheet_name=None, engine="calamine")
         name = sheet if sheet in book else next(iter(book))
         return book[name], {k: v for k, v in book.items() if k != name}
     if ext == ".csv":
@@ -47,7 +47,7 @@ def read_master(path: Path | None) -> dict[str, pd.DataFrame]:
     """主数据工作簿（门店信息、商品信息、销售目标）：发起人上传的，或员工配置自带的。"""
     if path is None or not path.exists():
         return {}
-    return pd.read_excel(path, sheet_name=None)
+    return pd.read_excel(path, sheet_name=None, engine="calamine")
 
 
 def apply_lookups(df: pd.DataFrame, lookups: list[dict[str, Any]], sources: dict[str, pd.DataFrame]

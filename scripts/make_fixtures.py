@@ -22,7 +22,8 @@ rng = np.random.default_rng(20261027)
 
 
 def book() -> dict[str, pd.DataFrame]:
-    b = pd.read_excel(SRC / "销售明细.xlsx", sheet_name=None, dtype={"门店编码": str, "商品编码": str})
+    b = pd.read_excel(SRC / "销售明细.xlsx", sheet_name=None, engine="calamine",
+                      dtype={"门店编码": str, "商品编码": str})
     b[SHEET]["销售日期"] = pd.to_datetime(b[SHEET]["销售日期"])
     return b
 

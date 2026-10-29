@@ -118,6 +118,12 @@ SIGNED_AFTER_WORD = re.compile(r"(增长|下降|下滑|下跌|上涨|上升|提�
                                r"([^，,；;。！？{}\n]{0,12}?)\s*\{\{\s*([^{}\s|]+)\s*\}\}")  # 允许中间隔几个字，如“拉低华东区实收 {{…}}”
 
 
+def _is_threshold(ctx: QCContext, num: str) -> bool:
+    th = (ctx.kpis or {}).get("threshold")
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*[%％]", num.strip())
+    return th is not None and m is not None and abs(float(m.group(1)) - th * 100) < 1e-6
+
+
 @rule("data_consistency", "数据一致性")
 def data_consistency(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
     details: list[Any] = []
@@ -130,6 +136,8 @@ def data_consistency(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
             if fld == "cause" and _quoted_from_minutes(ctx, i, m.group(0)):
                 continue
             if _clause_in_minutes(ctx, bare, m.start(), m.end()):
+                continue
+            if _is_threshold(ctx, m.group(0)):  # “环比超过 10%”是配置的异常阈值，不是计算结果
                 continue
             details.append({"type": "hardcoded", "section": sid, "index": i, "field": fld, "text": m.group(0).strip(),
                             "msg": f"正文直接写了数字“{m.group(0).strip()}”，应使用占位符引用程序计算结果"})
