@@ -49,7 +49,7 @@ MINI_API_KEY=sk-...
 MINI_MODEL_NAME=deepseek-chat                    # 需支持 Function Calling
 ```
 
-推荐 **deepseek-flash**：已用它跑通当时全部 44 条真实模型用例（约 70 万 token，用例迁移到官方数据之前），一份周报约 1.3 万～1.4 万 token、模型耗时约 20 秒；
+推荐 **deepseek-flash**：迁移到官方数据后的 33 条真实模型用例全部通过（约 53 万 token），一份周报约 1.3 万～1.4 万 token、模型耗时约 20 秒；
 与 gemini-3.8-flash-high 的对比（速度、token、原因归属是否谨慎）见 `reports/real_model_report.md`。
 
 然后：
