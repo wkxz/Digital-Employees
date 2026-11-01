@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import config_admin
 from .config import Employee, load_employee, runs_dir
 from .fsutil import read_json, sha256_file, sha256_json, write_json
 from .llm import LLMUnavailable, build_llm
@@ -22,7 +23,7 @@ from .periods import parse_week, today
 from .qc.engine import append_record, blocking_failures, now, program_fix, run_rules
 from .qc.rules import QCContext
 from .render import anomaly_flat
-from .states import AUTO, INITIATOR, REVIEWER, SYSTEM, S
+from .states import AUTO, INITIATOR, REVIEWER, SYSTEM, S, self_review_problem
 from .store import IllegalTransition, Store
 from .tools import server as tool_server
 from .tools.errors import INTERNAL, INVALID_INPUT, MISSING_INPUT, ToolDenied, ToolFailure
@@ -40,6 +41,11 @@ class Orchestrator:
         d = runs_dir() / tid
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+    def _emp(self, task: dict) -> Employee:
+        """任务按发起时的配置快照执行；没有快照的旧任务读当前配置。"""
+        base = self.task_dir(task["id"]) / "config"
+        return load_employee(task["employee"], base if (base / task["employee"]).exists() else None)
 
     def _emit(self, tid: str):
         return lambda type_, step_id, payload: self.store.event(tid, type_, step_id, payload)
@@ -108,13 +114,18 @@ class Orchestrator:
                 form[key], names[key] = saved[-1]
 
     def create(self, employee_id: str, values: dict[str, Any], files: dict[str, Any],
-               meta: dict[str, Any] | None = None) -> str:
-        emp = load_employee(employee_id)
+               meta: dict[str, Any] | None = None, user: str | None = None) -> str:
+        load_employee(employee_id)  # 当前配置有错时直接报错，不创建任务
         tid = Store.new_id()
+        # 锁定配置：复制一份到任务目录，之后有人改配置也不影响这个任务
+        sha = config_admin.snapshot(self.store, employee_id, self.task_dir(tid))
+        emp = load_employee(employee_id, self.task_dir(tid) / "config")
         form = {k: v for k, v in values.items() if v not in (None, "")}
         names: dict[str, Any] = {}
         self._put_files(tid, emp, form, names, files, append=False)
-        self.store.create_task(employee_id, form, {**(meta or {}), "file_names": names}, tid=tid)
+        self.store.create_task(employee_id, form, {**(meta or {}), "file_names": names, "created_by": user,
+                                                   "config_sha": sha}, tid=tid)
+        self.store.event(tid, "config_snapshot", None, {"employee": employee_id, "config_sha": sha})
         return tid
 
     def _save_input(self, tid: str, key: str, src: Path) -> tuple[str, str]:
@@ -174,7 +185,8 @@ class Orchestrator:
                 if st == S.CREATED:
                     raise
                 self.store.event(tid, "error", None, {"state": st, "error": str(e)})
-                self._pause(tid, "step_failed", f"{e}。请改正 employee.yaml / SKILL.md（可先运行 mini check-config）后重试。")
+                self._pause(tid, "step_failed", f"{e}。请改正 employee.yaml / SKILL.md（可先运行 mini check-config）后，"
+                                                "选择“使用最新配置”重试。")
             except Exception as e:  # 兜底：任何意外都转人工，不崩溃
                 if st == S.CREATED:
                     raise
@@ -196,7 +208,7 @@ class Orchestrator:
 
     # ---------------------------------------------------------------- CREATED
     def _on_created(self, task: dict, resumed: bool) -> None:
-        emp = load_employee(task["employee"])
+        emp = self._emp(task)
         errors = self.validate_form(task, emp)
         self.store.event(task["id"], "form_validated", None, {"errors": errors})
         if errors:
@@ -234,7 +246,7 @@ class Orchestrator:
 
     def _on_admission(self, task: dict, resumed: bool) -> None:
         tid = task["id"]
-        emp = load_employee(task["employee"])
+        emp = self._emp(task)
         errors = self.validate_form(task, emp)
         if errors:  # 补充的材料格式不对
             self._pause(tid, "admission_missing", "补充的材料不符合要求：" + "；".join(errors), resume_to=S.RUNNING)
@@ -341,7 +353,7 @@ class Orchestrator:
 
     def _on_running(self, task: dict, resumed: bool) -> None:
         tid, version, state = task["id"], task["version"], task["state"]
-        emp = load_employee(task["employee"])
+        emp = self._emp(task)
         gw = self._gateway(task, emp)
         llm = None
         fb = self._feedback(tid, version) if state == S.REWORK else None
@@ -522,7 +534,7 @@ class Orchestrator:
 
     def _on_qc(self, task: dict, resumed: bool) -> None:
         tid = task["id"]
-        emp = load_employee(task["employee"])
+        emp = self._emp(task)
         ctx, specs = self._qc_context(task, emp)
         results = run_rules(ctx, specs)
         fails = blocking_failures(results)
@@ -553,7 +565,7 @@ class Orchestrator:
 
     def _on_fixing(self, task: dict, resumed: bool) -> None:
         tid, version = task["id"], task["version"]
-        emp = load_employee(task["employee"])
+        emp = self._emp(task)
         n = task["qc_rounds"] + 1
         # 缓存键绑定“被修正的那一版产物”：断点恢复时复用；重试或人工修改后产物变了，就重新修正，不会拿旧结果覆盖
         key = f"fix@{task['artifact']['tag']}r{n}"
@@ -608,19 +620,24 @@ class Orchestrator:
 
     # ================================================================ 人工操作
     def review(self, tid: str, decision: str, comments: str = "", reviewed_sha256: str | None = None,
-               actor: str = REVIEWER, run: bool = True) -> S:
+               actor: str = REVIEWER, run: bool = True, user: str | None = None) -> S:
         task = self.store.get(tid)
-        emp = load_employee(task["employee"])
+        emp = self._emp(task)
+        event = "approve" if decision == "approve" else "request_changes"
+        if (why := self_review_problem(task, {"user": user})):  # 先拦下，避免写入审核意见等副作用；闸门里还会再判一次
+            self.store.reject(tid, event, actor, f"闸门未通过：{why}", task["state"])
         self.store.event(tid, "review_submitted", None, {"decision": decision, "comments": comments, "actor": actor,
-                                                         "version": task["version"], "reviewed_sha256": reviewed_sha256})
+                                                         "user": user, "version": task["version"],
+                                                         "reviewed_sha256": reviewed_sha256})
         if decision == "approve":
-            self.store.transition(tid, "approve", actor, {"reviewed_sha256": reviewed_sha256, "reason": "审核通过"})
+            self.store.transition(tid, "approve", actor, {"reviewed_sha256": reviewed_sha256, "reason": "审核通过",
+                                                          "user": user})
             self._deliver(tid)
             return S.DELIVERED
         max_rw = emp.limits["rework_max_rounds"]
         if task["rework_rounds"] >= max_rw:
             return self.store.transition(tid, "request_changes_exhausted", actor,
-                                         {"comments": comments, "max_rework_rounds": max_rw},
+                                         {"comments": comments, "max_rework_rounds": max_rw, "user": user},
                                          pause_reason=f"已返工 {max_rw} 次仍未通过，请审核人与发起人线下沟通后处理",
                                          resume_to=S.PENDING_REVIEW.value)
         kpis = read_json(self.task_dir(tid) / "work" / "kpis.json")
@@ -630,7 +647,7 @@ class Orchestrator:
         write_json(self.task_dir(tid) / "steps" / f"feedback@v{new_v}.json",
                    {"comments": comments, "todos": todos, "prev_content_path": task["artifact"]["content_path"]})
         self.store.transition(tid, "request_changes", actor, {"comments": comments, "max_rework_rounds": max_rw,
-                                                              "reason": comments},
+                                                              "reason": comments, "user": user},
                               version=new_v, rework_rounds=task["rework_rounds"] + 1, qc_rounds=0)
         self.store.event(tid, "feedback_parsed", None, {"version": new_v, "todos": todos})
         return self.drive(tid) if run else S.REWORK
@@ -661,7 +678,7 @@ class Orchestrator:
     def supplement(self, tid: str, files: dict[str, str | Path] | None = None, fields: dict[str, Any] | None = None,
                    actor: str = INITIATOR, run: bool = True) -> S:
         task = self.store.get(tid)
-        emp = load_employee(task["employee"])
+        emp = self._emp(task)
         form, names = dict(task["form"]), dict(task["meta"].get("file_names", {}))
         self._put_files(tid, emp, form, names, files or {}, append=True)
         form.update(fields or {})
@@ -670,9 +687,18 @@ class Orchestrator:
                               form=form, meta={**task["meta"], "file_names": names})
         return self.drive(tid) if run else S.ADMISSION
 
-    def retry(self, tid: str, actor: str = INITIATOR, clear_faults: bool = False, run: bool = True) -> S:
+    def retry(self, tid: str, actor: str = INITIATOR, clear_faults: bool = False, run: bool = True,
+              refresh_config: bool = False) -> S:
+        """从断点重试。refresh_config：改用当前最新的员工配置（如管理员放宽了某条质检规则），默认沿用发起时的配置。"""
         task = self.store.get(tid)
         updates: dict[str, Any] = {"resume_to": None}
+        if refresh_config:
+            old = task["meta"].get("config_sha")
+            sha = config_admin.snapshot(self.store, task["employee"], self.task_dir(tid))
+            task["meta"] = {**task["meta"], "config_sha": sha}
+            updates["meta"] = task["meta"]
+            self.store.event(tid, "config_snapshot", None, {"employee": task["employee"], "config_sha": sha,
+                                                            "previous": old, "reason": "重试时改用最新配置"})
         if task.get("resume_to") in (S.QC, S.AUTO_FIXING):
             updates["qc_rounds"] = 0
         if clear_faults:
@@ -686,7 +712,7 @@ class Orchestrator:
         import jsonschema
 
         task = self.store.get(tid)
-        emp = load_employee(task["employee"])
+        emp = self._emp(task)
         updates: dict[str, Any] = {"qc_rounds": 0, "resume_to": None}
         if content is not None:
             jsonschema.validate(content, output_schema("fix", emp.report))

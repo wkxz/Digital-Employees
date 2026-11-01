@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--field", action="append", help="其他表单字段，如 focus_region=华东")
     p.add_argument("--fault", action="append", help="故障注入，如 search_minutes:timeout 或 mock:direction_error")
     p.add_argument("--no-run", action="store_true")
+    p.add_argument("--user", default=os.environ.get("MINI_USER"), help="发起人姓名（审核时不能是同一人）")
 
     for name, h in (("run", "继续执行任务"), ("status", "查看任务"), ("retry", "暂停后重试（从断点继续）"),
                     ("cancel", "取消任务"), ("events", "回放事件日志")):
@@ -56,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         q.add_argument("--as", dest="actor", default=INITIATOR)
         if name == "retry":
             q.add_argument("--clear-faults", action="store_true", help="清除该任务的故障注入（模拟网络恢复）")
+            q.add_argument("--refresh-config", action="store_true", help="改用当前最新的员工配置（默认沿用发起时的配置）")
         if name == "events":
             q.add_argument("--full", action="store_true")
 
@@ -65,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--approve", action="store_true")
     g.add_argument("--changes", metavar="意见")
     p.add_argument("--as", dest="actor", default=REVIEWER)
+    p.add_argument("--user", default=os.environ.get("MINI_USER"), help="审核人姓名（不能审核自己发起的任务）")
 
     p = sub.add_parser("supplement", help="补充材料")
     p.add_argument("task")
@@ -76,6 +80,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--content", help="修改后的内容 JSON 文件（省略则直接重新质检）")
 
     sub.add_parser("resume", help="恢复所有被中断的任务（断点恢复）")
+    p = sub.add_parser("config-history", help="员工配置变更记录（谁、何时、改了哪个文件）")
+    p.add_argument("--employee", default="weekly_report")
+    p.add_argument("--diff", type=int, metavar="序号", help="显示某次变更的差异")
     sub.add_parser("check-model", help="检查模型配置：连通性、工具调用、JSON 输出、响应时间")
     p = sub.add_parser("check-config", help="检查员工配置（employee.yaml / SKILL.md），现场改完先跑一次")
     p.add_argument("--employee", default="weekly_report")
@@ -100,7 +107,8 @@ def main(argv: list[str] | None = None) -> int:
             for f in a.fault or []:
                 tool, _, mode = f.partition(":")
                 faults.append({"tool": tool, "mode": mode or "timeout"})
-            tid = o.create(a.employee, {"period": a.period, **_kv(a.field)}, _kv(a.file), {"faults": faults})
+            tid = o.create(a.employee, {"period": a.period, **_kv(a.field)}, _kv(a.file), {"faults": faults},
+                           user=a.user)
             print(f"已创建任务 {tid}")
             if not a.no_run:
                 o.drive(tid)
@@ -122,15 +130,16 @@ def main(argv: list[str] | None = None) -> int:
         elif a.cmd == "review":
             t = o.store.get(a.task)
             if a.approve:
-                o.review(a.task, "approve", reviewed_sha256=(t["artifact"] or {}).get("sha256"), actor=a.actor)
+                o.review(a.task, "approve", reviewed_sha256=(t["artifact"] or {}).get("sha256"), actor=a.actor,
+                         user=a.user)
             else:
-                o.review(a.task, "changes", a.changes, actor=a.actor)
+                o.review(a.task, "changes", a.changes, actor=a.actor, user=a.user)
             _show(o, a.task)
         elif a.cmd == "supplement":
             o.supplement(a.task, _kv(a.file), _kv(a.field))
             _show(o, a.task)
         elif a.cmd == "retry":
-            o.retry(a.task, a.actor, clear_faults=a.clear_faults)
+            o.retry(a.task, a.actor, clear_faults=a.clear_faults, refresh_config=a.refresh_config)
             _show(o, a.task)
         elif a.cmd == "recheck":
             content = json.loads(Path(a.content).read_text(encoding="utf-8")) if a.content else None
@@ -148,6 +157,8 @@ def main(argv: list[str] | None = None) -> int:
                 if not a.full and len(payload) > 160:
                     payload = payload[:160] + "…"
                 print(f"{e['seq']:>4} {e['ts'][11:23]} {e['type']:<20} {e['step_id'] or '':<9} {payload}")
+        elif a.cmd == "config-history":
+            config_history(o, a.employee, a.diff)
         elif a.cmd == "check-model":
             from .llm.check import check_model
             return check_model()
@@ -173,6 +184,23 @@ def main(argv: list[str] | None = None) -> int:
         print("改正后运行 mini check-config 确认。", file=sys.stderr)
         return 4
     return 0
+
+
+def config_history(o: Orchestrator, employee: str, seq: int | None) -> None:
+    import difflib
+
+    from . import config_admin
+    config_admin.record_external_changes(o.store, employee)
+    if seq is None:
+        for c in config_admin.history(o.store, employee):
+            print(f"#{c['seq']:<4} {c['ts'][:19]}  {c['file']:<14} {c['user']}  {c['note']}")
+        return
+    c = o.store.get_config_change(seq)
+    if not c:
+        print(f"没有序号为 {seq} 的配置变更")
+        return
+    print("\n".join(difflib.unified_diff((c["content_before"] or "").splitlines(), c["content_after"].splitlines(),
+                                        f"{c['file']}（改前）", f"{c['file']}（改后）", lineterm="")))
 
 
 def check_config(employee: str) -> int:

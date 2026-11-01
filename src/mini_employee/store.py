@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS events (
   type TEXT NOT NULL, step_id TEXT, payload_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_events_task ON events(task_id, seq);
+CREATE TABLE IF NOT EXISTS config_changes (   -- 员工配置变更记录（只追加）：谁、何时、改了哪个文件、改前改后全文
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, employee TEXT NOT NULL, file TEXT NOT NULL, ts TEXT NOT NULL,
+  user TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', sha_before TEXT, sha_after TEXT NOT NULL,
+  content_before TEXT, content_after TEXT NOT NULL
+);
 """
 
 
@@ -110,7 +115,37 @@ class Store:
         rows = self.db.execute(sql + " ORDER BY seq", args).fetchall()
         return [{**dict(r), "payload": json.loads(r["payload_json"])} for r in rows]
 
+    # ------------------------------------------------------------ config changes
+    def config_change(self, employee: str, file: str, user: str, before: str | None, after: str,
+                      note: str = "") -> int:
+        from .config_admin import _sha
+        cur = self.db.execute(
+            "INSERT INTO config_changes(employee, file, ts, user, note, sha_before, sha_after, content_before, "
+            "content_after) VALUES (?,?,?,?,?,?,?,?,?)",
+            (employee, file, _now(), user, note, _sha(before), _sha(after), before, after))
+        return int(cur.lastrowid)
+
+    def config_changes(self, employee: str, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.db.execute("SELECT * FROM config_changes WHERE employee=? ORDER BY seq DESC LIMIT ?",
+                               (employee, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def last_config_change(self, employee: str, file: str) -> dict[str, Any] | None:
+        r = self.db.execute("SELECT * FROM config_changes WHERE employee=? AND file=? ORDER BY seq DESC LIMIT 1",
+                            (employee, file)).fetchone()
+        return dict(r) if r else None
+
+    def get_config_change(self, seq: int) -> dict[str, Any] | None:
+        r = self.db.execute("SELECT * FROM config_changes WHERE seq=?", (seq,)).fetchone()
+        return dict(r) if r else None
+
     # ------------------------------------------------------------ state machine
+    def reject(self, tid: str, event: str, actor: str, reason: str, state: S | None = None) -> None:
+        """拒绝一次流转：留痕后抛出 IllegalTransition。"""
+        self.event(tid, "transition_rejected", None, {"from": state or self.get(tid)["state"], "event": event,
+                                                      "actor": actor, "reason": reason})
+        raise IllegalTransition(reason)
+
     def transition(self, tid: str, event: str, actor: str, ctx: dict[str, Any] | None = None,
                    **updates: Any) -> S:
         """唯一的状态变更入口：查流转表 → 校验触发方 → 执行闸门 → 乐观锁更新 → 记事件。"""
@@ -125,9 +160,7 @@ class Store:
         elif t.guard and (g := t.guard(task, ctx)):
             reason = f"闸门未通过：{g}"
         if reason:
-            self.event(tid, "transition_rejected", None, {"from": task["state"], "event": event, "actor": actor,
-                                                          "reason": reason})
-            raise IllegalTransition(reason)
+            self.reject(tid, event, actor, reason, task["state"])
         dst = t.dst or S(task["resume_to"])
         if dst not in (S.SUSPENDED, S.WAITING_INPUT) and "pause_reason" not in updates:
             updates["pause_reason"] = None
@@ -136,7 +169,7 @@ class Store:
         try:
             self.update(tid, expect_row_version=task["row_version"], state=dst, **updates)
             self.event(tid, "state_changed", None, {"from": task["state"], "to": dst, "event": event, "actor": actor,
-                                                    "reason": ctx.get("reason")})
+                                                    "user": ctx.get("user"), "reason": ctx.get("reason")})
         except BaseException:
             self.db.execute("ROLLBACK")
             raise

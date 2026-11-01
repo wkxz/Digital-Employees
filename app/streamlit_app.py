@@ -16,15 +16,14 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
-import yaml
-
-from mini_employee.config import EMPLOYEES_DIR, ROOT, load_employee, parse_skill_md, read_employee_files, runs_dir
+from mini_employee import config_admin
+from mini_employee.config import EMPLOYEES_DIR, ROOT, load_employee, read_employee_files, runs_dir
 from mini_employee.fsutil import read_json
 from mini_employee.orchestrator import Orchestrator
 from mini_employee.render import build_blocks, write_md
-from mini_employee.states import INITIATOR, LABELS, REVIEWER, TERMINAL, S, table_markdown
+from mini_employee.states import ADMIN, INITIATOR, LABELS, REVIEWER, TERMINAL, S, table_markdown
 from mini_employee.store import IllegalTransition
-from mini_employee.validate import ConfigError, validate
+from mini_employee.validate import ConfigError
 
 st.set_page_config(page_title="迷你数字员工", page_icon="📊", layout="wide")
 EMP_ID = "weekly_report"
@@ -71,8 +70,19 @@ def act(fn, *args, **kw) -> Any:
 st.sidebar.title("📊 迷你数字员工")
 st.sidebar.caption("经营周报员工 · 可审核、可交付")
 page = st.sidebar.radio("页面", ["发起任务", "任务中心", "审核台", "事件回放", "故障注入", "员工配置"])
-role = st.sidebar.selectbox("当前身份", [INITIATOR, REVIEWER], format_func=lambda r: {"initiator": "发起人",
-                                                                                   "reviewer": "审核人"}[r])
+ROLE_LABEL = {INITIATOR: "发起人", REVIEWER: "审核人", ADMIN: "管理员"}
+role = st.sidebar.selectbox("当前身份", [INITIATOR, REVIEWER, ADMIN], format_func=ROLE_LABEL.get)
+# 演示用的简单身份：姓名用于留痕和“不能审核自己发起的任务”；管理员须输入 .env 中的 MINI_ADMIN_PASSWORD
+user = st.sidebar.text_input("姓名", value={INITIATOR: "张三", REVIEWER: "李四", ADMIN: "王五"}[role],
+                             key=f"user_{role}").strip() or None
+admin_pw = None
+if role == ADMIN:
+    admin_pw = st.sidebar.text_input("管理员口令", type="password")
+    if not config_admin.admin_configured():
+        st.sidebar.warning("未设置管理员口令：在 .env 中添加 MINI_ADMIN_PASSWORD=… 后重启界面")
+    elif admin_pw and not config_admin.check_admin(admin_pw):
+        st.sidebar.error("口令不正确")
+is_admin = role == ADMIN and config_admin.check_admin(admin_pw)
 try:
     model = os.environ.get("MINI_MODEL") or (read_employee_files(EMP_ID)[1].get("model") or {}).get("provider", "mock")
 except Exception:  # noqa: BLE001  YAML 写坏时下面会提示，这里不中断页面
@@ -178,7 +188,7 @@ if page == "发起任务":
             elif use_sample and k in sample:
                 paths[k] = sample[k]
         faults = [{"tool": x.split(":")[0], "mode": x.split(":")[1]} for x in fs]
-        tid = act(o.create, EMP_ID, values, paths, {"faults": faults})
+        tid = act(o.create, EMP_ID, values, paths, {"faults": faults}, user=user)
         if tid:
             run_bg(tid)
             st.success(f"已创建任务 {tid}，正在后台执行。到“任务中心”查看进度。")
@@ -195,6 +205,8 @@ elif page == "任务中心":
     if t:
         tid = t["id"]
         st.markdown(f"### {tid}　{badge(t['state'])}")
+        st.caption(f"发起人：{t['meta'].get('created_by') or '未记录'}　"
+                   f"员工配置版本：{(t['meta'].get('config_sha') or '发起前的旧任务，读当前配置')[:12]}")
         if t["pause_reason"]:
             (st.warning if t["state"] not in TERMINAL else st.error)(t["pause_reason"])
         steps = o.store.events(tid, ["step_started", "step_completed"])
@@ -218,7 +230,9 @@ elif page == "任务中心":
         if t["state"] == S.SUSPENDED:
             c1, c2 = st.columns(2)
             clear = c1.checkbox("同时清除本任务的故障注入（模拟服务恢复）", value=True)
-            if c1.button("从断点重试", type="primary") and act(o.retry, tid, role, clear_faults=clear, run=False):
+            refresh = c1.checkbox("使用最新的员工配置（默认沿用发起时的配置）", value=False)
+            if c1.button("从断点重试", type="primary") and act(o.retry, tid, role, clear_faults=clear, run=False,
+                                                          refresh_config=refresh):
                 run_bg(tid)
                 st.rerun()
             if t["artifact"] and c2.button("人工确认后重新质检") and act(o.manual_recheck, tid, None, role, run=False):
@@ -268,11 +282,11 @@ elif page == "审核台":
             comments = st.text_area("退回意见（退回时必填，可写多条，用分号或换行分隔）")
             c1, c2 = st.columns(2)
             if c1.button("✅ 审核通过并交付", type="primary"):
-                if act(o.review, tid, "approve", reviewed_sha256=art["sha256"], actor=role):
+                if act(o.review, tid, "approve", reviewed_sha256=art["sha256"], actor=role, user=user):
                     st.success("已交付")
                     st.rerun()
             if c2.button("↩️ 退回修改"):
-                if act(o.review, tid, "changes", comments, actor=role, run=False):
+                if act(o.review, tid, "changes", comments, actor=role, run=False, user=user):
                     run_bg(tid)
                     st.success("已退回，员工正在按意见重做")
                     st.rerun()
@@ -314,35 +328,57 @@ elif page == "故障注入":
                "纪要读取服务超时（read_minutes）": {"tool": "read_minutes", "mode": "timeout"},
                "KPI 查询服务 503（query_kpi）": {"tool": "query_kpi", "mode": "error"},
                "模型接口断开（llm）": {"tool": "llm", "mode": "timeout"}}
-    chosen = [k for k, v in options.items() if st.toggle(k, value=v in cur)]
-    if st.button("保存", type="primary"):
+    if not is_admin:
+        st.info("只有管理员可以修改全局故障注入（左侧切换为“管理员”并输入口令）。")
+    chosen = [k for k, v in options.items() if st.toggle(k, value=v in cur, disabled=not is_admin)]
+    if is_admin and st.button("保存", type="primary"):
         path.write_text(json.dumps([options[k] for k in chosen], ensure_ascii=False), encoding="utf-8")
         st.success("已保存")
 
 # ================================================================ 员工配置
 elif page == "员工配置":
     st.header("员工配置")
-    st.caption("业务人员改这里即可调整员工做法，无需改代码。保存前自动校验，有错误不会写入；保存后对新执行的步骤生效。")
-    tab1, tab2, tab3 = st.tabs(["employee.yaml（结构）", "SKILL.md（做法）", "状态流转表"])
+    st.caption("业务人员改这里即可调整员工做法，无需改代码。只有管理员可以保存；保存前自动校验，有错误不会写入；"
+               "每次修改都会留痕，可查看差异、一键回退。修改只影响之后新发起的任务，进行中的任务沿用发起时的配置。")
+    if not is_admin:
+        st.info("当前为只读。修改配置请在左侧切换为“管理员”并输入口令。")
+    files = config_admin.editable_files(EMP_ID)
+    tabs = st.tabs([f"{files[0]}（结构）", f"{files[1]}（做法）", "修改记录", "状态流转表"])
     d = EMPLOYEES_DIR / EMP_ID
-    for tab, name in ((tab1, "employee.yaml"), (tab2, "SKILL.md")):
+    for tab, name in zip(tabs[:2], files):
         with tab:
-            p = d / name
-            text = st.text_area(name, p.read_text(encoding="utf-8"), height=520, key=name)
-            if st.button(f"保存 {name}", key=f"save_{name}"):
-                try:  # 先校验改后的整套配置，通过了才写盘
-                    is_yaml = name.endswith(".yaml")
-                    raw = yaml.safe_load(text if is_yaml else (d / "employee.yaml").read_text(encoding="utf-8")) or {}
-                    skill = (d / "SKILL.md").read_text(encoding="utf-8") if is_yaml else text
-                    errors, warnings = validate(raw, parse_skill_md(skill)[1])
-                except Exception as e:  # noqa: BLE001  YAML 语法错误
-                    errors, warnings = [f"{type(e).__name__}: {e}"], []
+            text = st.text_area(name, (d / name).read_text(encoding="utf-8"), height=520, key=name,
+                                disabled=not is_admin)
+            if is_admin:
+                note = st.text_input("修改说明（可选）", key=f"note_{name}")
+                if st.button(f"保存 {name}", key=f"save_{name}"):
+                    errors, warnings, seq = config_admin.save(o.store, EMP_ID, name, text, user or "管理员",
+                                                              admin_pw, note)
+                    if errors:
+                        st.error("配置有误，未保存：\n\n" + "\n".join(f"- {x}" for x in errors))
+                    elif seq:
+                        st.success(f"已保存，校验通过（变更 #{seq}）")
+                    for w in warnings:
+                        st.warning(w)
+    with tabs[2]:
+        config_admin.record_external_changes(o.store, EMP_ID)
+        hist = config_admin.history(o.store, EMP_ID)
+        if not hist:
+            st.info("暂无修改记录")
+        else:
+            st.dataframe(pd.DataFrame([{"序号": c["seq"], "时间": c["ts"][:19], "文件": c["file"], "修改人": c["user"],
+                                        "说明": c["note"]} for c in hist]), hide_index=True, width="stretch")
+            seq = st.selectbox("查看某次修改", [c["seq"] for c in hist], format_func=lambda x: f"#{x}")
+            c = next(x for x in hist if x["seq"] == seq)
+            diff = difflib.unified_diff((c["content_before"] or "").splitlines(), c["content_after"].splitlines(),
+                                        "改前", "改后", lineterm="", n=1)
+            st.code("\n".join(diff) or "（首次记录的版本，没有改前内容）", language="diff")
+            if is_admin and c["content_before"] is not None and st.button(f"回退到 #{seq} 之前的内容"):
+                errors, warnings, new = config_admin.rollback(o.store, EMP_ID, seq, user or "管理员", admin_pw)
                 if errors:
-                    st.error("配置有误，未保存：\n\n" + "\n".join(f"- {x}" for x in errors))
+                    st.error("未回退：\n\n" + "\n".join(f"- {x}" for x in errors))
                 else:
-                    p.write_text(text, encoding="utf-8", newline="\n")
-                    st.success("已保存，校验通过")
-                for w in warnings:
-                    st.warning(w)
-    with tab3:
+                    st.success(f"已回退（变更 #{new}）")
+                    st.rerun()
+    with tabs[3]:
         st.markdown(table_markdown())

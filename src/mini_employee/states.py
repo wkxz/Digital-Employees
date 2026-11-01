@@ -38,6 +38,7 @@ WAITING = {S.WAITING_INPUT, S.SUSPENDED, S.PENDING_REVIEW}  # 等人处理
 AUTO = {S.CREATED, S.ADMISSION, S.RUNNING, S.QC, S.AUTO_FIXING, S.REWORK}  # 程序自动推进，可断点恢复
 
 INITIATOR, REVIEWER, SYSTEM = "initiator", "reviewer", "system"
+ADMIN = "admin"  # 管理员：维护员工配置、故障注入；不参与任务流转
 
 Guard = Callable[[dict[str, Any], dict[str, Any]], str | None]  # (task, ctx) -> 拒绝原因 / None
 
@@ -69,7 +70,15 @@ def _g_fix_exhausted(task: dict, ctx: dict) -> str | None:
     return None if task["qc_rounds"] >= ctx["max_fix_rounds"] else "自动修正次数未达上限"
 
 
+def self_review_problem(task: dict, ctx: dict) -> str | None:
+    """发起人不能审核自己发起的任务（双方都留了姓名时判定）。"""
+    by, user = (task.get("meta") or {}).get("created_by"), ctx.get("user")
+    return f"不能审核自己发起的任务（发起人：{by}）" if by and user and by == user else None
+
+
 def _g_approve(task: dict, ctx: dict) -> str | None:
+    if (s := self_review_problem(task, ctx)):
+        return s
     art = task.get("artifact") or {}
     if not art.get("sha256"):
         return "没有可交付的产物"
@@ -81,6 +90,8 @@ def _g_approve(task: dict, ctx: dict) -> str | None:
 
 
 def _g_changes(task: dict, ctx: dict) -> str | None:
+    if (s := self_review_problem(task, ctx)):
+        return s
     if not (ctx.get("comments") or "").strip():
         return "退回修改必须填写意见"
     if task["rework_rounds"] >= ctx["max_rework_rounds"]:
@@ -89,6 +100,8 @@ def _g_changes(task: dict, ctx: dict) -> str | None:
 
 
 def _g_changes_exhausted(task: dict, ctx: dict) -> str | None:
+    if (s := self_review_problem(task, ctx)):
+        return s
     if not (ctx.get("comments") or "").strip():
         return "退回修改必须填写意见"
     return None if task["rework_rounds"] >= ctx["max_rework_rounds"] else "返工次数未达上限"
@@ -133,8 +146,8 @@ TRANSITIONS: list[T] = [
     T(S.QC, "step_failed", S.SUSPENDED, (SYSTEM,), None, "质检程序异常（保留断点）"),
     T(S.AUTO_FIXING, "fix_done", S.QC, (SYSTEM,), None, "修正后重新质检"),
     T(S.AUTO_FIXING, "step_failed", S.SUSPENDED, (SYSTEM,), None, "修正过程中工具/模型失败或超限"),
-    T(S.PENDING_REVIEW, "approve", S.DELIVERED, (REVIEWER,), _g_approve, "审核人通过，且审核版本 = 交付版本、质检通过"),
-    T(S.PENDING_REVIEW, "request_changes", S.REWORK, (REVIEWER,), _g_changes, "审核人退回，意见非空，返工次数 < 上限"),
+    T(S.PENDING_REVIEW, "approve", S.DELIVERED, (REVIEWER,), _g_approve, "审核人通过（不能是发起人本人），且审核版本 = 交付版本、质检通过"),
+    T(S.PENDING_REVIEW, "request_changes", S.REWORK, (REVIEWER,), _g_changes, "审核人退回（不能是发起人本人），意见非空，返工次数 < 上限"),
     T(S.PENDING_REVIEW, "request_changes_exhausted", S.SUSPENDED, (REVIEWER,), _g_changes_exhausted,
       "返工次数已达上限，转线下沟通"),
     T(S.REWORK, "rework_done", S.QC, (SYSTEM,), None, "按意见重做完成，新版本重新质检"),

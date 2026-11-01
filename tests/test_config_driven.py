@@ -154,13 +154,16 @@ def test_current_config_is_valid(capsys):
     assert "校验通过" in capsys.readouterr().out
 
 
-def test_config_broken_mid_task_pauses_with_reason(edit_employee, orch, sample_files):
-    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files, {"faults": [{"tool": "llm", "mode": "timeout"}]})
-    assert orch.drive(tid) == S.SUSPENDED  # 执行到一半暂停
+def test_config_broken_mid_task_does_not_affect_running_task(edit_employee, orch, sample_files):
+    faults = {"faults": [{"tool": "llm", "mode": "timeout"}]}
+    keep = orch.create("weekly_report", {"period": "2026-W44"}, sample_files, faults)
+    fresh = orch.create("weekly_report", {"period": "2026-W44"}, sample_files, faults)
+    assert orch.drive(keep) == S.SUSPENDED and orch.drive(fresh) == S.SUSPENDED  # 执行到一半暂停
     edit_employee(lambda r: r["quality_checks"].append({"rule": "no_such_rule"}))  # 期间有人把配置改错了
-    assert orch.retry(tid, clear_faults=True) == S.SUSPENDED
-    reason = orch.store.get(tid)["pause_reason"]
-    assert "配置有误" in reason and "no_such_rule" in reason and "check-config" in reason
+    assert orch.retry(keep, clear_faults=True) == S.PENDING_REVIEW  # 沿用发起时的配置快照，不受影响
+    assert orch.retry(fresh, clear_faults=True, refresh_config=True) == S.SUSPENDED  # 主动改用最新配置
+    reason = orch.store.get(fresh)["pause_reason"]
+    assert "配置有误" in reason and "no_such_rule" in reason and "使用最新配置" in reason
 
 
 # ---------------------------------------------------------------- 现场演练：企业数据列名不同，只加别名
