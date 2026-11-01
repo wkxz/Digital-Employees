@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -100,14 +101,34 @@ except Exception as e:  # noqa: BLE001  配置写错时其他页面无法工作�
     emp, page = None, "员工配置"
 
 
-def task_picker(states: set[S] | None = None, key: str = "pick") -> dict | None:
-    tasks = [t for t in o.store.list() if not states or t["state"] in states]
+def task_picker(states: set[S] | None = None, key: str = "pick", include=None, brief: bool = False) -> dict | None:
+    tasks = [t for t in o.store.list() if not states or t["state"] in states or (include and include(t))]
     if not tasks:
         st.info("暂无任务")
         return None
-    labels = {t["id"]: f"{t['id']} · {t['form'].get('period', '')} · {LABELS[t['state']]} · V{t['version']}" for t in tasks}
+    # brief：只显示不会变的部分。选中项的状态 / 版本在页面上自动刷新时，下拉框里的文字不会跟着更新
+    labels = {t["id"]: f"{t['id']} · {t['form'].get('period', '')}" + ("" if brief else
+                                                                      f" · {LABELS[t['state']]} · V{t['version']}")
+              for t in tasks}
     tid = st.selectbox("选择任务", list(labels), format_func=labels.get, key=key)
     return o.store.get(tid)
+
+
+def review_history(tid: str, t: dict) -> list[dict]:
+    """每一版的审核结果：从状态变化事件中取审核人的通过 / 退回，加上当前这一版的状态。"""
+    rows, v = [], 1
+    for e in o.store.events(tid, ["state_changed"]):
+        p = e["payload"]
+        if p.get("event") == "approve":
+            rows.append({"版本": f"V{v}", "结果": "通过并交付", "审核人": p.get("user") or "", "意见": "",
+                         "时间": e["ts"][5:19].replace("T", " ")})
+        elif p.get("event") in ("request_changes", "request_changes_exhausted"):
+            rows.append({"版本": f"V{v}", "结果": "退回修改", "审核人": p.get("user") or "", "意见": p.get("reason") or "",
+                         "时间": e["ts"][5:19].replace("T", " ")})
+            v += p.get("event") == "request_changes"
+    if t["state"] != S.DELIVERED and rows:
+        rows.append({"版本": f"V{t['version']}", "结果": LABELS[t["state"]], "审核人": "", "意见": "", "时间": ""})
+    return rows
 
 
 def report_preview(t: dict) -> None:
@@ -250,8 +271,29 @@ elif page == "任务中心":
 # ================================================================ 审核台
 elif page == "审核台":
     st.header("审核台")
-    t = task_picker({S.PENDING_REVIEW, S.DELIVERED}, key="review_pick")
-    if t and t["artifact"]:
+    flash = st.empty()
+    # 退回后任务进入返工，仍留在审核台显示进度，V2 生成后直接出现在这里
+    t = task_picker({S.PENDING_REVIEW, S.DELIVERED}, key="review_pick", include=lambda x: x["version"] > 1,
+                    brief=True)
+    working = bool(t) and t["state"] not in (S.PENDING_REVIEW, S.DELIVERED)
+    if msg := st.session_state.get("review_flash"):  # 返工期间一直显示，新版本出来后再显示一次
+        flash.success(msg)
+        if not working:
+            del st.session_state["review_flash"]
+    if t:
+        tid = t["id"]
+        history = review_history(tid, t)
+        if history:
+            st.caption("版本记录")
+            st.dataframe(pd.DataFrame(history), hide_index=True, width="stretch")
+    if working:
+        if t["state"] in (S.SUSPENDED, S.WAITING_INPUT):
+            st.warning(f"V{t['version']} 返工时暂停：{t['pause_reason']}　请到“任务中心”处理。")
+        else:
+            st.info(f"V{t['version']} 正在按审核意见重做（{LABELS[t['state']]}），完成并通过质检后会自动显示在这里……")
+            time.sleep(2)
+            st.rerun()
+    elif t and t["artifact"]:
         tid, d, art = t["id"], o.task_dir(t["id"]), t["artifact"]
         st.markdown(f"### {tid}　{badge(t['state'])}　版本 V{t['version']}（{art['tag']}）")
         tab1, tab2, tab3, tab4 = st.tabs(["周报预览", "质检记录", "与上一版的差异", "审核意见采纳情况"])
@@ -288,7 +330,8 @@ elif page == "审核台":
             if c2.button("↩️ 退回修改"):
                 if act(o.review, tid, "changes", comments, actor=role, run=False, user=user):
                     run_bg(tid)
-                    st.success("已退回，员工正在按意见重做")
+                    st.session_state["review_flash"] = (f"已退回 V{t['version']}，员工正在按意见生成 V{t['version'] + 1}，"
+                                                        "完成后在本页重新审核")
                     st.rerun()
 
 # ================================================================ 事件回放
