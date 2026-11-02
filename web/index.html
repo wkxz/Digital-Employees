@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>迷你数字员工 · 控制台</title>
+<meta name="description" content="可审核、可交付的经营周报 Agent：任务发起、准入校验、执行、自动质检、人工审核、交付">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2305060b'/%3E%3Ccircle cx='32' cy='32' r='14' fill='none' stroke='%23c8ff4d' stroke-width='5'/%3E%3Ccircle cx='32' cy='32' r='4' fill='%233ef0e0'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="bg" aria-hidden="true"></canvas>
+<div class="bg-grid" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+
+<div id="loader" aria-live="polite">
+  <div class="loader-inner">
+    <div class="loader-top"><span>Mini Digital Employee</span><span>经营周报员工</span></div>
+    <div class="loader-count"><b>000</b><span>%</span></div>
+    <div class="loader-bar"><i></i></div>
+    <div class="loader-lines">启动中</div>
+  </div>
+</div>
+
+<div class="cursor" aria-hidden="true"><div class="cursor-ring"><span class="cursor-label"></span></div><div class="cursor-dot"></div></div>
+<div class="scroll-progress" aria-hidden="true"></div>
+
+<header class="topbar">
+  <a class="brand" href="#/" aria-label="迷你数字员工 · 总览">
+    <canvas width="34" height="34"></canvas>
+    <span><b>迷你数字员工</b><small>Mini · Employee</small></span>
+  </a>
+  <nav class="nav" aria-label="主导航"></nav>
+  <div class="top-right">
+    <span class="model-pill"></span>
+    <span class="role-host"></span>
+    <button class="menu-btn" aria-label="菜单"><i></i><i></i></button>
+  </div>
+</header>
+<div class="overlay-menu" aria-label="菜单"></div>
+<div id="hazard" hidden></div>
+
+<main id="view"></main>
+
+<div id="curtain" aria-hidden="true"></div>
+<div id="drawer"></div>
+<div id="toasts" aria-live="polite"></div>
+
+<script src="js/mock.js"></script>
+<script src="js/fx.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/graph.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
