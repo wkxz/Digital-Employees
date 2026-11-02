@@ -418,6 +418,13 @@ class Orchestrator:
                 "content_path": render_out["content_path"], "texts_path": render_out["texts_path"],
                 "qc_passed": False}
 
+    def _skip_optional(self, task: dict, step: dict) -> dict[str, Any]:
+        """可选材料未上传（如周会纪要）：不调用工具，写一份空结果，后续步骤按“没有这份材料”处理。"""
+        if step["tool"] == "read_minutes":
+            write_json(self.task_dir(task["id"]) / "work" / "minutes.json", [])
+            return {"count": 0, "paragraphs": [], "has_pii": False, "masked": 0, "meta": {}, "skipped": "未上传周会纪要"}
+        return {"skipped": f"未提供 {step['skip_if_empty']}"}
+
     def _report_meta(self, task: dict, emp: Employee, version: int) -> dict[str, Any]:
         w = parse_week(task["form"]["period"])
         load = self._out(task["id"], "load")
@@ -432,6 +439,7 @@ class Orchestrator:
                 "cleaning": load.get("cleaning", {}), "alias_mapping": load.get("alias_mapping", {}),
                 "overridden_rows": load.get("overridden_rows", 0), "superseded_files": load.get("superseded_files", []),
                 "redacted_columns": load.get("redacted_columns", []), "minutes_masked": minutes.get("masked", 0),
+                "minutes_missing": bool(minutes.get("skipped")),
                 "master_origin": load.get("master_origin", {}),
                 "footer": emp.report.get("footer", "")}
 
@@ -449,6 +457,8 @@ class Orchestrator:
               fb: dict | None) -> dict[str, Any]:
         tid = task["id"]
         if step["type"] == "tool":
+            if step.get("skip_if_empty") and not self._resolve(step["skip_if_empty"], task, emp):
+                return self._skip_optional(task, step)
             args = self._resolve(step.get("args", {}), task, emp)
             if step["tool"] == "render_charts":
                 args["idempotency_key"] = f"{tid}:{step['id']}"

@@ -165,7 +165,7 @@ def search_minutes(
     if not src.exists():
         raise ToolError(encode(MISSING_INPUT, "尚未读取周会纪要"))
     hits = D.search_minutes(read_json(src), keywords)
-    return {"matches": hits, "note": "" if hits else "纪要中没有相关内容，原因应写“待确认”"}
+    return {"matches": hits, "note": "" if hits else "纪要中没有相关内容，按岗位说明写“原因待核实”，不要换关键词反复检索"}
 
 
 @mcp.tool
