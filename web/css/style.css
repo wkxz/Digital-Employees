@@ -104,7 +104,6 @@ html.has-cursor .cursor { display: block; }
 .cursor.is-label .cursor-ring { width: 84px; height: 84px; margin: -42px 0 0 -42px; background: var(--lime); border-color: var(--lime); }
 .cursor.is-label .cursor-label { opacity: 1; }
 .cursor.is-label .cursor-dot { opacity: 0; }
-.cursor.is-down .cursor-ring { transform-origin: center; scale: .82; }
 .cursor.is-text .cursor-ring { width: 4px; height: 26px; margin: -13px 0 0 -2px; border-radius: 2px; background: var(--lime); }
 
 /* ---------------------------------------------------------------- 开场加载 */

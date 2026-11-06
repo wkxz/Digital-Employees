@@ -129,11 +129,13 @@ void main(){
     if (!c) return;
     document.documentElement.classList.add("has-cursor");
     const dot = c.querySelector(".cursor-dot"), ring = c.querySelector(".cursor-ring"), label = c.querySelector(".cursor-label");
-    let rx = mouse.x, ry = mouse.y, shown = false;
+    let rx = mouse.x, ry = mouse.y, rs = 1, shown = false;
     const loop = () => {
       rx = lerp(rx, mouse.x, 0.2); ry = lerp(ry, mouse.y, 0.2);
+      // 按下时缩小写进同一个 transform（先平移再缩放），单独用 CSS scale 会连位移一起缩放，按住拖选文字时光圈偏离鼠标
+      rs = lerp(rs, c.classList.contains("is-down") ? 0.82 : 1, 0.25);
       dot.style.transform = `translate(${mouse.x}px,${mouse.y}px)`;
-      ring.style.transform = `translate(${rx}px,${ry}px)`;
+      ring.style.transform = `translate(${rx}px,${ry}px) scale(${rs})`;
       requestAnimationFrame(loop);
     };
     loop();
