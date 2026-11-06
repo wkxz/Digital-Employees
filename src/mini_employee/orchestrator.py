@@ -604,6 +604,30 @@ class Orchestrator:
                                                "请人工修改后重新质检，或直接重试。",
                                   resume_to=S.QC.value)
 
+    def _must_keep(self, specs: list[dict[str, Any]], task: dict) -> list[str]:
+        """修正时必须同时满足的其他质检要求（来自本任务的质检配置），避免修一处、坏一处
+        （如压缩篇幅时删掉摘要里的“目标达成率”）。"""
+        out = []
+        for c in specs:
+            r, p = c["rule"], c.get("params") or {}
+            if r == "keyword_required":
+                where = f"{p['section']} 章节" if p.get("section") else "正文"
+                out.append(f"{where}必须提到：{'、'.join(p.get('keywords', []))}")
+            elif r == "regex_forbidden":
+                out.append(f"不得出现：{'、'.join(p.get('patterns', []))}")
+            elif r == "cause_evidence":
+                out.append("每条异常都要有原因；有纪要依据的保留纪要引用，没有的写“原因待核实”")
+            elif r == "threshold_coverage":
+                out.append("环比超过阈值的区域、门店必须仍出现在异常章节，不能为压缩篇幅删掉异常条目")
+            elif r == "data_consistency":
+                out.append("数字只用占位符，不自己写数字；涨跌词后的占位符加 |abs")
+            elif r == "length":
+                out.append(f"summary 不超过 {p.get('summary_max_items', 5)} 条、{p.get('summary_max_chars', 400)} 字")
+            elif r == "feedback_addressed":
+                fb = self._feedback(task["id"], task["version"])
+                out.append(f"已落实的审核意见不能改回：{fb['comments']}" if fb else "已落实的审核意见不能改回")
+        return out
+
     def _on_fixing(self, task: dict, resumed: bool) -> None:
         tid, version = task["id"], task["version"]
         emp = self._emp(task)
@@ -620,7 +644,7 @@ class Orchestrator:
             fails = [r for r in qc["results"] if not r["passed"] and r["severity"] == "blocking"]
             d = self.task_dir(tid)
             content = read_json(d / task["artifact"]["content_path"])
-            ctx, _ = self._qc_context(task, emp)
+            ctx, specs = self._qc_context(task, emp)
             words = next((c.get("params", {}).get("words", []) for c in emp.quality_checks
                           if c["rule"] == "sensitive_words"), [])
             content, actions, remaining = program_fix(content, fails, ctx.flat, words)
@@ -633,7 +657,8 @@ class Orchestrator:
                         llm, gw, self._emit(tid), step_id="fix", purpose="fix",
                         system=emp.skill(*FIX_SKILL_SECTIONS) +
                         ("" if "质检修正" in emp.skill_sections else f"\n\n## 质检修正\n{FIX_DEFAULT}"),
-                        payload={"content": content, "failures": remaining, "overview": overview(kpis),
+                        payload={"content": content, "failures": remaining, "must_keep": self._must_keep(specs, task),
+                                 "overview": overview(kpis),
                                            "placeholders": placeholder_table(kpis), "placeholders_help": PLACEHOLDER_HELP},
                         tools=["query_kpi"], output_schema=output_schema("fix", emp.report),
                         max_turns=emp.limits["max_model_turns_per_step"], max_seconds=emp.limits["max_step_seconds"])
