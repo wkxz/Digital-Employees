@@ -192,12 +192,49 @@ def entity_names(kpis: dict[str, Any]) -> list[str]:
     return [r["name"] for d in ("region", "store", "category") for r in t[d]]
 
 
-def parse_feedback(comments: str, cfg: dict[str, Any], kpis: dict[str, Any]) -> list[dict[str, Any]]:
+CAUSE_WORDS = ["原因", "归因", "为什么", "说清", "解释", "依据"]  # 员工配置 feedback.cause_words 可覆盖
+
+
+def _short_names(name: str) -> list[str]:
+    """门店名的常见简称：上海静安店 → 静安店、静安。用于在意见和纪要中认出门店。"""
+    out = [name]
+    if name.endswith("店") and len(name) > 4:
+        out += [name[2:], name[2:-1]]
+    return out
+
+
+def anomaly_targets(kpis: dict[str, Any], kws: list[str], minutes: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """意见点名的区域 / 门店 → 对应的异常条目，以及纪要中与之相关的条目编号（提到该区域、带动门店或该门店）。"""
+    out = []
+    for a in kpis.get("anomalies", []):
+        stores = [d["store"] for d in a.get("drivers") or [] if d.get("store")]
+        if not (a["entity"] in kws or a.get("region") in kws or any(st in kws for st in stores)):
+            continue
+        tokens = {t for n in [a["entity"], *stores] for t in _short_names(n)}
+        if a.get("region"):
+            tokens.add(a["region"])
+        rel = [m["no"] for m in minutes or []
+               if any(t in (m.get("text") or "") or t in (m.get("header") or "") for t in tokens)]
+        out.append({"id": a["id"], "label": a["label"], "minutes": rel})
+    return out
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[\s，,。.；;：:、“”\"'（）()]", "", s)
+
+
+def parse_feedback(comments: str, cfg: dict[str, Any], kpis: dict[str, Any],
+                   minutes: list[dict[str, Any]] | None = None, history: list[str] | None = None) -> list[dict[str, Any]]:
     """把审核意见拆成程序可校验的待办：{section, instruction, keywords, metrics, max_items}。
-    规则来自员工配置 feedback.section_aliases / metric_keywords。"""
+    规则来自员工配置 feedback.section_aliases / metric_keywords / cause_words。
+    要求说清某区域 / 门店异常原因的，再定位到具体异常条目（targets），并列出纪要中相关的条目，
+    质检时逐条核对原因是否真的补充了依据，而不是只换个说法。
+    history：本任务之前各轮的审核意见原文，同一条意见再次出现时记 repeat（第几次提出）。"""
     aliases: dict[str, list[str]] = cfg.get("section_aliases", {})
     metric_kw: dict[str, str] = cfg.get("metric_keywords", {})
+    cause_words: list[str] = cfg.get("cause_words", CAUSE_WORDS)
     names = entity_names(kpis)
+    seen = [_norm(x) for h in history or [] for x in re.split(r"[\n；;。]", h) if x.strip()]
     todos = []
     for item in filter(None, (s.strip() for s in re.split(r"[\n；;。]", comments))):
         section = next((sid for sid, words in aliases.items() if any(w in item for w in words)), "*")
@@ -208,5 +245,12 @@ def parse_feedback(comments: str, cfg: dict[str, Any], kpis: dict[str, Any]) -> 
         m = re.search(r"(\d+)\s*条", item)
         if m and section in ("summary", "next_week"):
             todo["max_items"] = int(m.group(1))
+        if any(w in item for w in cause_words):
+            targets = anomaly_targets(kpis, kws, minutes)
+            if targets:
+                todo.update(section="anomalies", targets=targets, need_minutes="纪要" in item)
+        n = seen.count(_norm(item))
+        if n:
+            todo["repeat"] = n + 1
         todos.append(todo)
     return todos

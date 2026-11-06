@@ -598,7 +598,7 @@ class Orchestrator:
             self.store.transition(tid, "qc_fail", SYSTEM, {"max_fix_rounds": max_fix,
                                                            "reason": "、".join(r.name for r in fails)})
         else:
-            msgs = "；".join(d["msg"] if isinstance(d, dict) else str(d) for r in fails for d in r.details[:3])
+            msgs = "；".join(d["msg"] if isinstance(d, dict) else str(d) for r in fails for d in [x for x in r.details if not (isinstance(x, dict) and x.get("type") == "note")][:3])
             self.store.transition(tid, "qc_fail_exhausted", SYSTEM, {"max_fix_rounds": max_fix},
                                   pause_reason=f"自动修正 {max_fix} 轮后仍有质检项未通过：{msgs}。"
                                                "请人工修改后重新质检，或直接重试。",
@@ -707,7 +707,11 @@ class Orchestrator:
                                          pause_reason=f"已返工 {max_rw} 次仍未通过，请审核人与发起人线下沟通后处理",
                                          resume_to=S.PENDING_REVIEW.value)
         kpis = read_json(self.task_dir(tid) / "work" / "kpis.json")
-        todos = parse_feedback(comments, emp.raw.get("feedback", {}), kpis)
+        minutes_path = self.task_dir(tid) / "work" / "minutes.json"
+        minutes = read_json(minutes_path) if minutes_path.exists() else []
+        history = [fb["comments"] for v in range(2, task["version"] + 1) if (fb := self._feedback(tid, v))]
+        todos = parse_feedback(comments, emp.raw.get("feedback", {}), kpis,
+                               minutes if isinstance(minutes, list) else minutes.get("paragraphs", []), history)
         new_v = task["version"] + 1
         # 先落盘审核意见再流转：若在两步之间中断，返工时也一定读得到意见，不会原样复用上一版
         write_json(self.task_dir(tid) / "steps" / f"feedback@v{new_v}.json",

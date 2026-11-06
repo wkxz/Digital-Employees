@@ -320,6 +320,9 @@ def feedback_addressed(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
     details = []
     prev = ctx.prev_content or {}
     for td in ctx.todos:
+        if td.get("targets"):  # 要求说清某条异常的原因：逐条核对原因是否真的补充了依据
+            details += _cause_feedback(ctx, td, prev)
+            continue
         secs = [td["section"]] if td["section"] != "*" else list(ctx.content)
         changed = any(json.dumps(ctx.content.get(s), ensure_ascii=False, sort_keys=True)
                       != json.dumps(prev.get(s), ensure_ascii=False, sort_keys=True) for s in secs)
@@ -332,4 +335,42 @@ def feedback_addressed(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
             details.append({"type": "feedback_not_addressed", "section": td["section"],
                             "instruction": td["instruction"],
                             "msg": f"审核意见未落实：“{td['instruction']}”（章节 {td['section']}）"})
-    return not details, details, "逐条落实审核意见"
+    failed = [d for d in details if d["type"] != "note"]
+    return not failed, details, "逐条落实审核意见"
+
+
+def _squash_text(s: str) -> str:
+    return re.sub(r"[\s，,。.；;：:、“”\"'（）()]", "", s or "")
+
+
+def _cause_feedback(ctx: QCContext, td: dict, prev: dict) -> list[dict[str, Any]]:
+    """“某区域下滑原因没说清楚，请结合纪要补充”这类意见：
+    - 纪要中还有与该异常相关、上一版没引用的条目 → 必须新引用其中至少一条，且原因改写；
+    - 相关条目已全部引用或纪要没有相关内容 → 原因须改写，并给审核人一条说明（type=note，不阻断送审），
+      说明纪要中没有更多依据，避免反复退回、模型硬编原因。"""
+    out = []
+    cur_items = {it.get("id"): it for it in ctx.content.get("anomalies", [])}
+    prev_items = {it.get("id"): it for it in prev.get("anomalies", [])}
+    for t in td["targets"]:
+        cur, old = cur_items.get(t["id"]), prev_items.get(t["id"]) or {}
+        base = {"section": "anomalies", "id": t["id"], "instruction": td["instruction"]}
+        if not cur:
+            out.append({**base, "type": "feedback_not_addressed", "msg": f"审核意见未落实：{t['label']}的异常条目缺失"})
+            continue
+        changed = _squash_text(cur.get("cause")) != _squash_text(old.get("cause"))
+        rel = set(t.get("minutes") or [])
+        old_ev, new_ev = set(old.get("evidence") or []), set(cur.get("evidence") or [])
+        avail = sorted(rel - old_ev)
+        if avail and not (new_ev - old_ev) & rel:
+            nos = "、".join(f"第 {n} 条" for n in avail)
+            out.append({**base, "type": "feedback_not_addressed",
+                        "msg": f"审核意见未落实：{t['label']}的原因没有补充新的纪要依据（纪要中相关但尚未引用的：{nos}）"})
+        elif not changed:
+            out.append({**base, "type": "feedback_not_addressed",
+                        "msg": f"审核意见未落实：{t['label']}的原因与上一版相同"})
+        elif not avail:
+            cited = "、".join(f"第 {n} 条" for n in sorted(rel))
+            out.append({**base, "type": "note",
+                        "msg": (f"{t['label']}：纪要中相关条目（{cited}）已全部引用，" if rel else f"{t['label']}：纪要中没有相关内容，")
+                               + "无法补充更多依据，原因已改写；如仍不清楚，需线下补充信息"})
+    return out

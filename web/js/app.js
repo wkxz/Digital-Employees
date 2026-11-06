@@ -371,7 +371,7 @@
       case "step_completed": return `完成 ${p.key}${p.ms ? " · " + p.ms + "ms" : ""}`;
       case "step_skipped": return `跳过 ${p.key}（${p.reason || "已完成"}）`;
       case "review_submitted": return `${p.decision === "approve" ? "审核通过" : "退回修改"}${p.comments ? "：" + p.comments : ""}（${ACTOR[p.actor] || p.actor}）`;
-      case "feedback_parsed": return `审核意见拆成 ${(p.todos || []).length} 条待办（V${p.version}）`;
+      case "feedback_parsed": return `审核意见拆成 ${(p.todos || []).length} 条待办（V${p.version}）` + (p.todos || []).map((t) => (t.targets ? `；“${t.instruction}”对应异常 ${t.targets.map((x) => x.label).join("、")}` : "") + (t.repeat ? `，该意见已是第 ${t.repeat} 次提出` : "")).join("");
       case "delivered": return `生成交付包 · ${(p.files || []).length} 个文件`;
       case "task_created": return `发起任务 · 统计周期 ${(p.form && p.form.period) || "—"}`;
       case "form_changed": return `修改表单：${Object.entries(p.fields || {}).map(([k, c]) => `${k} ${c.from || "—"} → ${c.to}`).join("；")}${p.by ? "（" + p.by + "）" : ""}`;
@@ -984,7 +984,7 @@
       if (k === "qc") {
         const rounds = (r.qc && r.qc.rounds) || [];
         body.innerHTML = rounds.length ? rounds.map((rd) => `<div class="qc-round"><div class="qr-h"><b>第 ${rd.round_no} 次 · V${rd.version}</b><span class="chip ${rd.passed ? "up" : "down"}">${rd.passed ? "通过" : "未通过"}</span></div>
-          <ul class="qc-list">${rd.results.map((x, i) => `<li class="qc-item" style="--i:${i}">${checkIco(x.passed, i)}<span>${esc(x.name)} <span class="sev">${esc(x.rule)} · ${esc(x.severity)}</span></span><span></span>${!x.passed && x.details && x.details.length ? `<div class="det">${x.details.slice(0, 3).map((d) => esc(d.msg || d)).join("；")}</div>` : ""}</li>`).join("")}</ul>
+          <ul class="qc-list">${rd.results.map((x, i) => `<li class="qc-item" style="--i:${i}">${checkIco(x.passed, i)}<span>${esc(x.name)} <span class="sev">${esc(x.rule)} · ${esc(x.severity)}</span></span><span></span>${(() => { const ds = (x.details || []).filter((d) => !x.passed || (d && d.type === "note")); return ds.length ? `<div class="det">${ds.slice(0, 3).map((d) => esc(d.msg || d)).join("；")}</div>` : ""; })()}</li>`).join("")}</ul>
           ${rd.fix_actions && rd.fix_actions.length ? `<div class="fix-actions">修正动作：${rd.fix_actions.map(esc).join("；")}</div>` : ""}</div>`).join("") : `<p class="muted">暂无质检记录</p>`;
       } else if (k === "diff") {
         body.innerHTML = r.diff ? `<div class="diff">${r.diff.split("\n").map((l) => `<span class="${/^\+(?!\+\+)/.test(l) ? "add" : /^-(?!--)/.test(l) ? "del" : /^@@/.test(l) ? "hunk" : ""}">${esc(l) || " "}</span>`).join("")}</div>` : `<p class="muted">这是第一版，没有可比较的上一版。</p>`;

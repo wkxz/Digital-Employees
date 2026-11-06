@@ -43,6 +43,8 @@ def program_fix(content: dict[str, Any], failures: list[dict[str, Any]], flat: d
         left = []
         for d in f["details"]:
             t = d.get("type") if isinstance(d, dict) else None
+            if t == "note":  # 给审核人的说明，不是问题，不交给模型
+                continue
             if t == "hardcoded":
                 text = _item_text(c, d)
                 clause = _clause_of(text, d["text"]) if text is not None else None
