@@ -11,6 +11,7 @@ from typing import Any
 from .config import load_employee, runs_dir
 from .fsutil import exclusive_lock
 from .orchestrator import Orchestrator
+from .payloads import FeedbackCheck
 from .states import INITIATOR, LABELS, REVIEWER, S, table_markdown
 from .store import IllegalTransition
 from .validate import ConfigError
@@ -69,6 +70,15 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--changes", metavar="意见")
     p.add_argument("--as", dest="actor", default=REVIEWER)
     p.add_argument("--user", default=os.environ.get("MINI_USER"), help="审核人姓名（不能审核自己发起的任务）")
+    p.add_argument("--confirm", action="store_true", help="确认意见无误，跳过退回前检查")
+
+    p = sub.add_parser("revise", help="因审核意见无法落实而暂停时：更正意见（--comments）或撤回意见（--withdraw）")
+    p.add_argument("task")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--comments", metavar="新意见")
+    g.add_argument("--withdraw", action="store_true")
+    p.add_argument("--user", default=os.environ.get("MINI_USER"), help="审核人姓名")
+    p.add_argument("--confirm", action="store_true", help="确认意见无误，跳过退回前检查")
 
     p = sub.add_parser("supplement", help="补充材料（确认没有某份材料：--field waive_minutes_file=1）")
     p.add_argument("task")
@@ -134,7 +144,10 @@ def main(argv: list[str] | None = None) -> int:
                 o.review(a.task, "approve", reviewed_sha256=(t["artifact"] or {}).get("sha256"), actor=a.actor,
                          user=a.user)
             else:
-                o.review(a.task, "changes", a.changes, actor=a.actor, user=a.user)
+                o.review(a.task, "changes", a.changes, actor=a.actor, user=a.user, confirm=a.confirm)
+            _show(o, a.task)
+        elif a.cmd == "revise":
+            o.revise_feedback(a.task, "" if a.withdraw else a.comments, user=a.user, confirm=a.confirm)
             _show(o, a.task)
         elif a.cmd == "supplement":
             o.supplement(a.task, _kv(a.file), _kv(a.field), user=a.user)
@@ -177,6 +190,10 @@ def main(argv: list[str] | None = None) -> int:
         elif a.cmd == "cases":
             from .runner import run_cases
             return run_cases(a.paths, a.report, a.only, a.jobs)
+    except FeedbackCheck as e:
+        lines = [f"  - “{i['instruction']}”：{i['msg']}" for i in e.issues]
+        print("审核意见可能有误，未提交：", *lines, "确认无误时加 --confirm 再提交。", sep="\n", file=sys.stderr)
+        return 2
     except IllegalTransition as e:
         print(f"操作被拒绝：{e}", file=sys.stderr)
         return 2

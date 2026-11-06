@@ -86,7 +86,12 @@ def test_review_records_repeat_and_targets(done):
     orch, tid, _, _ = done
     orch.review(tid, "changes", COMMENT, actor="reviewer")
     assert orch.store.get(tid)["state"] == S.PENDING_REVIEW
-    orch.review(tid, "changes", COMMENT, actor="reviewer")
+    # 第 2 版已引用全部相关纪要：再次退回前先提示审核人，确认后仍可退回
+    from mini_employee.payloads import FeedbackCheck
+    with pytest.raises(FeedbackCheck, match="已全部引用"):
+        orch.review(tid, "changes", COMMENT, actor="reviewer")
+    assert orch.store.get(tid)["state"] == S.PENDING_REVIEW and orch.store.get(tid)["rework_rounds"] == 1
+    orch.review(tid, "changes", COMMENT, actor="reviewer", confirm=True)
     todos = orch.store.events(tid, ["feedback_parsed"])[-1]["payload"]["todos"]
     assert todos[0]["repeat"] == 2 and todos[0]["targets"][0]["id"] == "A1"
     # Mock 模型第二次返工写出与上一版相同的原因：判为未采纳（原检查同样不放行），不会当作已落实送审

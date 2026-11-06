@@ -17,7 +17,7 @@ from .config import Employee, load_employee, runs_dir
 from .fsutil import read_json, sha256_file, sha256_json, write_json
 from .llm import LLMUnavailable, build_llm
 from .llm.agent import MissingInput, StepLimitExceeded, run_agent_step
-from .payloads import (PLACEHOLDER_HELP, action_items, anomaly_inputs, draft_sections, form_fields, output_schema,
+from .payloads import (PLACEHOLDER_HELP, FeedbackCheck, check_feedback, action_items, anomaly_inputs, draft_sections, form_fields, output_schema,
                        overview, parse_feedback, placeholder_table)
 from .periods import parse_week, today
 from .qc.engine import append_record, blocking_failures, now, program_fix, run_rules
@@ -511,6 +511,11 @@ class Orchestrator:
             analysis = self._out(tid, f"analysis@v{version}")
             content = {**{k: draft.get(k, []) for k in draft_sections(emp.report)},
                        "anomalies": analysis.get("anomalies", [])}
+            # 分析、撰写两步都可能说明同一条意见：按意见去重，撰写步骤的说明在后、优先
+            resp = list({r.get("instruction"): r for r in (analysis.get("feedback_response") or [])
+                         + (draft.get("feedback_response") or []) if isinstance(r, dict)}.values())
+            if resp:  # 员工对审核意见的说明（如“不适用”及理由），质检时由程序核实
+                content["feedback_response"] = resp
             return self._render(task, emp, gw, content, version, f"v{version}", step["id"])
         # agent
         kpis = read_json(self.task_dir(tid) / "work" / "kpis.json")
@@ -590,6 +595,14 @@ class Orchestrator:
                                                "failed": [r.rule for r in results if not r.passed],
                                                "blocking_failed": [r.rule for r in fails]})
         max_fix = emp.limits["qc_max_fix_rounds"]
+        disputed = [d for r in fails for d in r.details if isinstance(d, dict) and d.get("type") == "feedback_disputed"]
+        if fails and all(isinstance(d, dict) and d.get("type") in ("feedback_disputed", "note")
+                         for r in fails for d in r.details):
+            msg = "；".join(d["msg"] for d in disputed)
+            self.store.transition(tid, "feedback_disputed", SYSTEM, {"reason": msg},
+                                  pause_reason=f"{msg}。请审核人确认：可更正或撤回该意见（任务页“更正审核意见”），或线下沟通后处理。",
+                                  resume_to=S.QC.value)
+            return
         if not fails:
             art["qc_passed"] = True
             self.store.update(tid, artifact=art)
@@ -647,6 +660,7 @@ class Orchestrator:
             ctx, specs = self._qc_context(task, emp)
             words = next((c.get("params", {}).get("words", []) for c in emp.quality_checks
                           if c["rule"] == "sensitive_words"), [])
+            old_resp = content.get("feedback_response")
             content, actions, remaining = program_fix(content, fails, ctx.flat, words)
             gw = self._gateway(task, emp)
             if remaining:
@@ -666,6 +680,8 @@ class Orchestrator:
                     self._pause(tid, "step_failed", f"自动修正第 {n} 轮失败：{e}。可人工修改后重新质检，或重试。")
                     return
                 actions.append("模型按质检意见改写：" + "、".join(f["name"] for f in remaining))
+                if old_resp and not content.get("feedback_response"):  # 修正时没带回员工对意见的说明：沿用
+                    content["feedback_response"] = old_resp
             seq = sum(1 for e in self.store.events(tid, ["step_completed"])
                       if e["step_id"] == "fix" and e["payload"].get("version") == version) + 1
             try:
@@ -685,13 +701,79 @@ class Orchestrator:
         self.store.transition(tid, "fix_done", SYSTEM, {"reason": f"第 {n} 轮修正完成"})
 
     # ================================================================ 人工操作
+    def _parse_review(self, tid: str, task: dict, emp: Employee, comments: str, history: list[str],
+                      content_rel: str | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """意见拆成待办，并用数据核对意见本身（不调用模型）。content_rel：审核人看到的那一版内容（默认当前产物）。"""
+        d = self.task_dir(tid)
+        kpis = read_json(d / "work" / "kpis.json")
+        mp = d / "work" / "minutes.json"
+        minutes = read_json(mp) if mp.exists() else []
+        cfg = emp.raw.get("feedback", {})
+        todos = parse_feedback(comments, cfg, kpis, minutes if isinstance(minutes, list) else minutes.get("paragraphs", []),
+                               history)
+        rel = content_rel or (task.get("artifact") or {}).get("content_path")
+        content = read_json(d / rel) if rel else None
+        issues = check_feedback(todos, kpis, emp.quality_checks, content, cfg.get("cause_words"))
+        return todos, issues
+
+    def feedback_stuck(self, task: dict) -> bool:
+        """因审核意见无法落实而暂停（自动修正用尽或员工认为不适用）：审核人可更正或撤回意见。"""
+        if task["state"] != S.SUSPENDED or not task.get("artifact") or not self._feedback(task["id"], task["version"]):
+            return False
+        qc = self.task_dir(task["id"]) / "qc" / "qc_report.json"
+        if not qc.exists():
+            return False
+        last = read_json(qc)["rounds"][-1]
+        return last["version"] == task["version"] and any(
+            r["rule"] == "feedback_addressed" and not r["passed"] for r in last["results"])
+
+    def revise_feedback(self, tid: str, comments: str, actor: str = REVIEWER, run: bool = True,
+                        user: str | None = None, confirm: bool = False) -> S:
+        """审核人更正审核意见：按新意见重新返工（生成新版本，不计入返工次数，原意见留痕）。
+        comments 为空表示撤回意见：当前版本不再校验该意见，直接重新质检。"""
+        task = self.store.get(tid)
+        emp = self._emp(task)
+        if not self.feedback_stuck(task):
+            raise IllegalTransition("只有因审核意见无法落实而暂停的任务才能更正或撤回意见")
+        old = self._feedback(tid, task["version"])
+        if not comments.strip():
+            write_json(self.task_dir(tid) / "steps" / f"feedback@v{task['version']}.json",
+                       {**old, "todos": [], "withdrawn": {"comments": old["comments"], "by": user}})
+            self.store.transition(tid, "withdraw_feedback", actor, {"user": user, "feedback_stuck": True,
+                                                                    "reason": f"撤回审核意见：{old['comments']}"},
+                                  qc_rounds=0, resume_to=None)
+            return self.drive(tid) if run else S.QC
+        history = [fb["comments"] for v in range(2, task["version"]) if (fb := self._feedback(tid, v))]
+        todos, issues = self._parse_review(tid, task, emp, comments, history, old["prev_content_path"])
+        if issues and not confirm:
+            self.store.event(tid, "feedback_checked", None, {"comments": comments, "issues": issues, "user": user})
+            raise FeedbackCheck(issues)
+        new_v = task["version"] + 1
+        write_json(self.task_dir(tid) / "steps" / f"feedback@v{new_v}.json",
+                   {"comments": comments, "todos": todos, "prev_content_path": old["prev_content_path"],
+                    "revised_from": old["comments"]})
+        self.store.transition(tid, "revise_feedback", actor, {"comments": comments, "user": user, "feedback_stuck": True,
+                                                              "reason": f"更正审核意见：{old['comments']} → {comments}"},
+                              version=new_v, qc_rounds=0, resume_to=None)
+        self.store.event(tid, "feedback_parsed", None, {"version": new_v, "todos": todos, "revised_from": old["comments"]})
+        return self.drive(tid) if run else S.REWORK
+
     def review(self, tid: str, decision: str, comments: str = "", reviewed_sha256: str | None = None,
-               actor: str = REVIEWER, run: bool = True, user: str | None = None) -> S:
+               actor: str = REVIEWER, run: bool = True, user: str | None = None, confirm: bool = False) -> S:
+        """confirm：退回前检查发现意见可能有误时（点名的对象不在异常清单、认不出的名称、要求写配置禁止的内容等），
+        默认不流转、把问题交审核人确认；确认后仍可退回，问题随待办保存，员工可据此说明“不适用”。"""
         task = self.store.get(tid)
         emp = self._emp(task)
         event = "approve" if decision == "approve" else "request_changes"
         if (why := self_review_problem(task, {"user": user})):  # 先拦下，避免写入审核意见等副作用；闸门里还会再判一次
             self.store.reject(tid, event, actor, f"闸门未通过：{why}", task["state"])
+        if (decision != "approve" and not confirm and actor == REVIEWER and task["state"] == S.PENDING_REVIEW
+                and comments.strip() and task["rework_rounds"] < emp.limits["rework_max_rounds"]):
+            history = [fb["comments"] for v in range(2, task["version"] + 1) if (fb := self._feedback(tid, v))]
+            _, issues = self._parse_review(tid, task, emp, comments, history)
+            if issues:  # 意见本身可能有误：不流转、不消耗返工次数，交审核人确认
+                self.store.event(tid, "feedback_checked", None, {"comments": comments, "issues": issues, "user": user})
+                raise FeedbackCheck(issues)
         self.store.event(tid, "review_submitted", None, {"decision": decision, "comments": comments, "actor": actor,
                                                          "user": user, "version": task["version"],
                                                          "reviewed_sha256": reviewed_sha256})
@@ -706,12 +788,8 @@ class Orchestrator:
                                          {"comments": comments, "max_rework_rounds": max_rw, "user": user},
                                          pause_reason=f"已返工 {max_rw} 次仍未通过，请审核人与发起人线下沟通后处理",
                                          resume_to=S.PENDING_REVIEW.value)
-        kpis = read_json(self.task_dir(tid) / "work" / "kpis.json")
-        minutes_path = self.task_dir(tid) / "work" / "minutes.json"
-        minutes = read_json(minutes_path) if minutes_path.exists() else []
         history = [fb["comments"] for v in range(2, task["version"] + 1) if (fb := self._feedback(tid, v))]
-        todos = parse_feedback(comments, emp.raw.get("feedback", {}), kpis,
-                               minutes if isinstance(minutes, list) else minutes.get("paragraphs", []), history)
+        todos, _ = self._parse_review(tid, task, emp, comments, history)
         new_v = task["version"] + 1
         # 先落盘审核意见再流转：若在两步之间中断，返工时也一定读得到意见，不会原样复用上一版
         write_json(self.task_dir(tid) / "steps" / f"feedback@v{new_v}.json",

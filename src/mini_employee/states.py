@@ -107,6 +107,13 @@ def _g_changes_exhausted(task: dict, ctx: dict) -> str | None:
     return None if task["rework_rounds"] >= ctx["max_rework_rounds"] else "返工次数未达上限"
 
 
+def _g_feedback_stuck(task: dict, ctx: dict) -> str | None:
+    """更正 / 撤回审核意见：仅限因意见无法落实而暂停的任务，且不能是发起人本人。"""
+    if (s := self_review_problem(task, ctx)):
+        return s
+    return None if ctx.get("feedback_stuck") else "任务不是因审核意见无法落实而暂停"
+
+
 def _g_has_files(task: dict, ctx: dict) -> str | None:
     return None if (ctx.get("files") or ctx.get("fields")) else "没有补充任何材料"
 
@@ -144,6 +151,8 @@ TRANSITIONS: list[T] = [
     T(S.QC, "qc_fail", S.AUTO_FIXING, (SYSTEM,), _g_fix_left, "有 blocking 规则不通过，修正次数 < 上限"),
     T(S.QC, "qc_fail_exhausted", S.SUSPENDED, (SYSTEM,), _g_fix_exhausted, "修正次数 ≥ 上限，转人工"),
     T(S.QC, "step_failed", S.SUSPENDED, (SYSTEM,), None, "质检程序异常（保留断点）"),
+    T(S.QC, "feedback_disputed", S.SUSPENDED, (SYSTEM,), None,
+      "员工说明审核意见不适用、程序无法核实，模型修正解决不了，转审核人确认"),
     T(S.AUTO_FIXING, "fix_done", S.QC, (SYSTEM,), None, "修正后重新质检"),
     T(S.AUTO_FIXING, "step_failed", S.SUSPENDED, (SYSTEM,), None, "修正过程中工具/模型失败或超限"),
     T(S.PENDING_REVIEW, "approve", S.DELIVERED, (REVIEWER,), _g_approve, "审核人通过（不能是发起人本人），且审核版本 = 交付版本、质检通过"),
@@ -154,6 +163,10 @@ TRANSITIONS: list[T] = [
     T(S.REWORK, "step_missing_input", S.WAITING_INPUT, (SYSTEM,), None, "重做中发现缺材料（保留断点）"),
     T(S.REWORK, "step_failed", S.SUSPENDED, (SYSTEM,), None, "重做中工具/模型失败或超限（保留断点）"),
     T(S.SUSPENDED, "retry", None, (INITIATOR, REVIEWER), _g_resume_to, "人工确认后从断点继续（回到暂停前的状态与步骤）"),
+    T(S.SUSPENDED, "revise_feedback", S.REWORK, (REVIEWER,), _g_feedback_stuck,
+      "因审核意见无法落实而暂停：审核人更正意见，按新意见重做（不计返工次数，原意见留痕）"),
+    T(S.SUSPENDED, "withdraw_feedback", S.QC, (REVIEWER,), _g_feedback_stuck,
+      "因审核意见无法落实而暂停：审核人撤回意见，当前版本重新质检"),
     T(S.SUSPENDED, "manual_recheck", S.QC, (INITIATOR, REVIEWER), None,
       "人工补充/修改后重新质检（仍须质检通过才能送审）"),
 ] + [T(s, "cancel", S.CANCELLED, (INITIATOR,), None, "发起人取消") for s in S if s not in TERMINAL]

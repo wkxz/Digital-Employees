@@ -34,6 +34,7 @@ from mini_employee.orchestrator import Orchestrator
 from mini_employee.qc.rules import RULES
 from mini_employee.render import build_blocks, write_md
 from mini_employee.states import INITIATOR, LABELS, REVIEWER, SYSTEM, TERMINAL, TRANSITIONS, S
+from mini_employee.payloads import FeedbackCheck
 from mini_employee.store import IllegalTransition
 from mini_employee.validate import ConfigError
 
@@ -259,6 +260,10 @@ def api_task(tid: str) -> dict[str, Any]:
                             for p in sorted(dd.iterdir()) if p.is_file()]
                            if t["state"] == S.DELIVERED and dd.exists() else [])
     out["resume_to"] = t.get("resume_to")
+    # 因审核意见无法落实而暂停：审核人可更正或撤回意见
+    out["feedback_stuck"] = o.feedback_stuck(t)
+    fb = o._feedback(tid, t["version"]) if out["feedback_stuck"] else None
+    out["feedback_comments"] = fb["comments"] if fb else None
     kp = o.task_dir(tid) / "work" / "kpis.json"
     out["kpis"] = kpi_digest(read_json(kp)) if kp.exists() else None
     return out
@@ -346,8 +351,13 @@ def api_action(tid: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
         if body.get("decision") == "approve":
             o.review(tid, "approve", reviewed_sha256=body.get("sha256"), actor=role, user=user)
         else:
-            o.review(tid, "changes", str(body.get("comments") or ""), actor=role, run=False, user=user)
+            o.review(tid, "changes", str(body.get("comments") or ""), actor=role, run=False, user=user,
+                     confirm=bool(body.get("confirm")))
             run_bg(tid)
+    elif action == "revise_feedback":  # 更正审核意见；comments 为空表示撤回
+        o.revise_feedback(tid, str(body.get("comments") or ""), actor=role, run=False, user=user,
+                          confirm=bool(body.get("confirm")))
+        run_bg(tid)
     else:
         raise ApiError(f"未知操作 {action}", 404)
     return task_brief(o.store.get(tid))
@@ -404,7 +414,7 @@ ROUTES_GET = [
 ]
 ROUTES_POST = [
     (re.compile(r"^/api/tasks$"), lambda m, b: api_create(b)),
-    (re.compile(r"^/api/tasks/([\w-]+)/(supplement|retry|recheck|cancel|review)$"), lambda m, b: api_action(m[1], m[2], b)),
+    (re.compile(r"^/api/tasks/([\w-]+)/(supplement|retry|recheck|cancel|review|revise_feedback)$"), lambda m, b: api_action(m[1], m[2], b)),
     (re.compile(r"^/api/faults$"), lambda m, b: api_faults_set(b)),
     (re.compile(r"^/api/config$"), lambda m, b: api_config_save(b)),
 ]
@@ -434,6 +444,8 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, e: BaseException) -> None:
         if isinstance(e, ApiError):
             self._json({"error": str(e)}, e.status)
+        elif isinstance(e, FeedbackCheck):  # 意见可能有误：交审核人确认（改意见，或确认后仍提交）
+            self._json({"error": "审核意见可能有误，请确认", "kind": "feedback_check", "issues": e.issues}, 409)
         elif isinstance(e, IllegalTransition):
             self._json({"error": f"操作被拒绝：{e}", "kind": "illegal_transition"}, 409)
         elif isinstance(e, ConfigError):

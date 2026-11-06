@@ -172,7 +172,12 @@ class MockLLM:
                 sug = f"建议评估{a['label']}增长的可持续性，总结可复制的经验。"
             out.append({"id": a["id"], "phenomenon": phen, "cause": cause, "evidence": evidence, "suggestion": sug,
                         "brief": f"原因{pw}" if not evidence else brief(cause)})
-        return {"anomalies": out}
+        # 意见带程序核实的问题（点名对象不在异常清单、要求写数据没有的指标等）：如实说明不适用，不编造
+        resp = [{"instruction": f["instruction"], "status": "not_applicable",
+                 "reason": "；".join(i["msg"] for i in f["issues"])}
+                for f in p.get("feedback") or [] if f.get("issues")
+                and any(i.get("kind") != "no_more_minutes" for i in f["issues"])]
+        return {"anomalies": out, **({"feedback_response": resp} if resp else {})}
 
     # ------------------------------------------------------------ 撰写周报
     def _draft(self, p: dict, results: list, turn: int, tool_names: set[str]) -> Any:

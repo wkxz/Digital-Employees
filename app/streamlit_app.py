@@ -21,6 +21,7 @@ from mini_employee import config_admin
 from mini_employee.config import EMPLOYEES_DIR, ROOT, load_employee, read_employee_files, runs_dir
 from mini_employee.fsutil import read_json
 from mini_employee.orchestrator import Orchestrator
+from mini_employee.payloads import FeedbackCheck
 from mini_employee.render import build_blocks, write_md
 from mini_employee.states import ADMIN, INITIATOR, LABELS, REVIEWER, TERMINAL, S, table_markdown
 from mini_employee.store import IllegalTransition
@@ -58,6 +59,9 @@ def act(fn, *args, **kw) -> Any:
     """执行一个操作；失败时在页面上说明原因，而不是显示报错堆栈。成功返回 fn 的结果（至少为 True）。"""
     try:
         return fn(*args, **kw) or True
+    except FeedbackCheck as e:  # 退回前检查：意见可能有误，交审核人确认
+        st.warning("审核意见可能有误，请确认：\n\n" + "\n".join(f"- “{i['instruction']}”：{i['msg']}" for i in e.issues)
+                   + "\n\n可修改意见后重新提交；确认无误时勾选“确认意见无误”再提交，员工确实无法落实的会说明理由，由程序核实。")
     except IllegalTransition as e:
         st.error(f"操作被拒绝：{e}")
     except ConfigError as e:
@@ -260,6 +264,20 @@ elif page == "任务中心":
                 if act(o.supplement, tid, paths, {**edits, **waive} or None, actor=role, run=False, user=user):
                     run_bg(tid)
                     st.rerun()
+        if t["state"] == S.SUSPENDED and o.feedback_stuck(t):  # 因审核意见无法落实而暂停：审核人可更正或撤回意见
+            st.subheader("审核意见无法落实")
+            st.caption("如果意见写错了或不适用：更正意见（按新意见重做，不计返工次数），或撤回意见（当前版本重新质检）；原意见留痕。")
+            fb = o._feedback(tid, t["version"])
+            new_c = st.text_area("更正后的审核意见", fb["comments"] if fb else "", key="revise_c")
+            fc = st.checkbox("确认意见无误（跳过退回前检查）", key="revise_confirm")
+            r1, r2 = st.columns(2)
+            if r1.button("按更正后的意见重做") and new_c.strip() and act(o.revise_feedback, tid, new_c, actor=role,
+                                                                     run=False, user=user, confirm=fc):
+                run_bg(tid)
+                st.rerun()
+            if r2.button("撤回意见，重新质检") and act(o.revise_feedback, tid, "", actor=role, run=False, user=user):
+                run_bg(tid)
+                st.rerun()
         if t["state"] == S.SUSPENDED:
             c1, c2 = st.columns(2)
             clear = c1.checkbox("同时清除本任务的故障注入（模拟服务恢复）", value=True)
@@ -339,8 +357,10 @@ elif page == "审核台":
                 if act(o.review, tid, "approve", reviewed_sha256=art["sha256"], actor=role, user=user):
                     st.success("已交付")
                     st.rerun()
+            confirm = st.checkbox("确认意见无误（跳过退回前检查）", key="review_confirm",
+                                  help="退回前程序会用数据核对意见本身，如点名的区域不在异常清单、要求写数据没有的指标")
             if c2.button("↩️ 退回修改"):
-                if act(o.review, tid, "changes", comments, actor=role, run=False, user=user):
+                if act(o.review, tid, "changes", comments, actor=role, run=False, user=user, confirm=confirm):
                     run_bg(tid)
                     st.session_state["review_flash"] = (f"已退回 V{t['version']}，员工正在按意见生成 V{t['version'] + 1}，"
                                                         "完成后在本页重新审核")

@@ -38,7 +38,7 @@
   const L = (s) => (S.meta && S.meta.states[s]) || s || "断点";
 
   /* ------------------------------------------------------------ 接口 */
-  class ApiErr extends Error { constructor(m, status) { super(m); this.status = status; } }
+  class ApiErr extends Error { constructor(m, status, data) { super(m); this.status = status; this.data = data || null; } }
   const API = {
     async call(method, path, body) {
       if (S.mock) {
@@ -51,7 +51,7 @@
       } catch (e) { throw new ApiErr("无法连接后端服务，请确认 web_server.py 正在运行", 0); }
       let data = null;
       try { data = await res.json(); } catch (e) { /* 非 JSON */ }
-      if (!res.ok) throw new ApiErr((data && (data.error + (data.details ? "：" + data.details.join("；") : ""))) || `HTTP ${res.status}`, res.status);
+      if (!res.ok) throw new ApiErr((data && (data.error + (data.details ? "：" + data.details.join("；") : ""))) || `HTTP ${res.status}`, res.status, data);
       return data;
     },
     get: (p) => API.call("GET", p),
@@ -318,6 +318,14 @@
     const pw = root.querySelector(".admin-pw");
     if (pw) pw.addEventListener("input", () => { S.adminPw = pw.value; });
   }
+  // 退回前程序用数据核对意见本身：可能有误时列出问题，审核人改意见，或确认后仍提交
+  function feedbackCheckBox(host, issues, onConfirm) {
+    host.innerHTML = `<div class="alert warn" style="margin-top:14px"><span class="a-ico">!</span><h4>审核意见可能有误，请确认</h4>
+      <p>${issues.map((i) => `“${esc(i.instruction)}”：${esc(i.msg)}`).join("<br>")}</p>
+      <p class="faint" style="font-size:13px">可修改意见后重新提交；确认无误也可仍然提交，员工会按意见处理，确实无法落实的会说明理由，由程序核实。</p>
+      <div class="btns" style="margin-top:10px"><button class="btn btn-sm btn-ghost" id="fcGo">${roll("确认无误，仍然提交")}</button></div></div>`;
+    $("#fcGo", host).addEventListener("click", (e) => onConfirm(e.currentTarget));
+  }
   function busy(btn, on) { btn.classList.toggle("loading", on); btn.disabled = on; }
   function centerOf(el) { const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }
   async function act(btn, fn, okMsg) {
@@ -371,6 +379,7 @@
       case "step_completed": return `完成 ${p.key}${p.ms ? " · " + p.ms + "ms" : ""}`;
       case "step_skipped": return `跳过 ${p.key}（${p.reason || "已完成"}）`;
       case "review_submitted": return `${p.decision === "approve" ? "审核通过" : "退回修改"}${p.comments ? "：" + p.comments : ""}（${ACTOR[p.actor] || p.actor}）`;
+      case "feedback_checked": return `退回前检查：意见可能有误（${(p.issues || []).map((i) => i.msg).join("；")}），已提示审核人确认`;
       case "feedback_parsed": return `审核意见拆成 ${(p.todos || []).length} 条待办（V${p.version}）` + (p.todos || []).map((t) => (t.targets ? `；“${t.instruction}”对应异常 ${t.targets.map((x) => x.label).join("、")}` : "") + (t.repeat ? `，该意见已是第 ${t.repeat} 次提出` : "")).join("");
       case "delivered": return `生成交付包 · ${(p.files || []).length} 个文件`;
       case "task_created": return `发起任务 · 统计周期 ${(p.form && p.form.period) || "—"}`;
@@ -780,6 +789,35 @@
           if (ok) refresh();
         });
         box.appendChild(card);
+      } else if (t.state === "SUSPENDED" && t.feedback_stuck) {
+        card.innerHTML = `<div class="card-title"><span class="dot" style="background:var(--rose)"></span>审核意见无法落实</div>
+          <p class="muted" style="margin-top:0;font-size:14px">员工无法按当前意见完成修改。如果意见写错了或不适用，审核人可以更正意见（按新意见重做，不计返工次数），或撤回意见（当前版本重新质检）；原意见留痕。</p>
+          ${S.role === "reviewer" ? `<textarea class="textarea" id="fbtxt">${esc(t.feedback_comments || "")}</textarea><div id="fbcheck"></div>
+          <div class="btns" style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap"><button class="btn btn-primary" id="fbrev">${roll("按更正后的意见重做")}</button>
+          <button class="btn btn-ghost" id="fbwd">${roll("撤回意见，重新质检")}</button></div>`
+          : `<p class="muted" style="font-size:14px">更正或撤回意见需由审核人操作，可在右上角切换身份。</p>`}`;
+        const send = async (btn, comments, confirm, okMsg) => {
+          busy(btn, true);
+          try {
+            await API.post(`/api/tasks/${id}/revise_feedback`, { comments, confirm, role: S.role });
+            FX.toast(okMsg, "ok");
+            refresh();
+          } catch (err) {
+            busy(btn, false);
+            if (err.data && err.data.kind === "feedback_check") feedbackCheckBox($("#fbcheck", card), err.data.issues || [], (b) => send(b, comments, true, okMsg));
+            else FX.toast(err.message, "err", 7000);
+          }
+        };
+        if (S.role === "reviewer") {
+          $("#fbrev", card).addEventListener("click", (e) => {
+            const v = $("#fbtxt", card).value.trim();
+            if (!v) { FX.toast("请填写更正后的意见；如要撤回意见，请点“撤回意见”", "warn"); return; }
+            send(e.currentTarget, v, false, "已更正审核意见，员工正在按新意见重做");
+          });
+          $("#fbwd", card).addEventListener("click", (e) => send(e.currentTarget, "", false, "已撤回审核意见，当前版本重新质检"));
+          $("#fbtxt", card).addEventListener("input", () => { $("#fbcheck", card).innerHTML = ""; });
+        }
+        box.appendChild(card);
       } else if (t.state === "SUSPENDED") {
         card.innerHTML = `<div class="card-title"><span class="dot" style="background:var(--rose)"></span>人工处理</div>
           <label class="toggle" style="margin-bottom:18px"><input type="checkbox" id="clr" checked><span class="sw"></span><span>同时清除本任务的故障注入<span class="faint">（模拟服务恢复）</span></span></label>
@@ -1011,6 +1049,7 @@
         <textarea class="textarea" id="rcom" placeholder="退回意见（退回时必填，可写多条，用分号或换行分隔）"></textarea>
         <div class="chips" style="margin-top:10px">${["华东区下滑原因没说清楚，请结合周会纪要补充", "摘要请补充目标达成率", "下周关注事项请写明负责人"].map((s) => `<button class="chip chip-btn" data-s="${esc(s)}">${esc(s)}</button>`).join("")}</div>
         <div class="btns"><button class="btn btn-primary" id="rok">${roll("通过并交付")}</button><button class="btn btn-ghost" id="rno">${roll("退回修改")}</button></div>
+        <div id="rcheck"></div>
         <div class="sha" style="margin-top:12px">通过时提交审核版本哈希 ${esc(String(r.sha256).slice(0, 12))}…，程序比对一致才允许交付</div></div>`;
       $$("[data-s]", dec).forEach((b) => b.addEventListener("click", () => { const ta = $("#rcom", dec); ta.value = ta.value ? ta.value + "；" + b.dataset.s : b.dataset.s; ta.focus(); }));
       $("#rok", dec).addEventListener("click", async (e) => {
@@ -1032,23 +1071,28 @@
           p.classList.remove("shake"); void p.offsetWidth; p.classList.add("shake");
         }
       });
-      $("#rno", dec).addEventListener("click", async (e) => {
-        const btn = e.currentTarget;
+      const sendBack = async (btn, confirm) => {
         const [x, y] = centerOf(btn);
         busy(btn, true);
         try {
-          await API.post(`/api/tasks/${id}/review`, { decision: "changes", comments: $("#rcom", dec).value, role: S.role });
+          await API.post(`/api/tasks/${id}/review`, { decision: "changes", comments: $("#rcom", dec).value, role: S.role, confirm });
           $("#paper", scope.root).classList.add("away");
           FX.toast("已退回，员工正在按意见重做", "ok");
           scope.later(() => { location.hash = `#/tasks/${id}`; }, 750);
         } catch (err) {
           busy(btn, false);
+          if (err.data && err.data.kind === "feedback_check") {
+            feedbackCheckBox($("#rcheck", dec), err.data.issues || [], (b) => sendBack(b, true));
+            return;
+          }
           FX.toast(err.message, "err", 7000);
           FX.shock(x, y);
           const p = $("#paper", scope.root);
           p.classList.remove("shake"); void p.offsetWidth; p.classList.add("shake");
         }
-      });
+      };
+      $("#rno", dec).addEventListener("click", (e) => sendBack(e.currentTarget, false));
+      $("#rcom", dec).addEventListener("input", () => { $("#rcheck", dec).innerHTML = ""; });
     };
     renderDecision();
     scope.listen(window, "rolechange", renderDecision);

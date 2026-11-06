@@ -157,7 +157,7 @@ def run_case(case: dict[str, Any], workdir: Path) -> dict[str, Any]:
         if action == "review":
             sha = arg.get("sha256", (t["artifact"] or {}).get("sha256"))
             o.review(tid, arg["decision"], arg.get("comments", ""), reviewed_sha256=sha,
-                     actor=arg.get("actor", "reviewer"))
+                     actor=arg.get("actor", "reviewer"), confirm=arg.get("confirm", False))
         elif action == "supplement":
             o.supplement(tid, _files(arg.get("files")), arg.get("fields"))
         elif action == "retry":

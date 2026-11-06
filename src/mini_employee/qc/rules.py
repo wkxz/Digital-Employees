@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from ..placeholders import PH_RE, find_keys, fmt_value
+from ..placeholders import PH_RE, find_keys, fmt_value, resolve
 from ..tools.data import IDCARD_RE, PHONE_RE
 
 
@@ -319,7 +319,22 @@ def regex_forbidden(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
 def feedback_addressed(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
     details = []
     prev = ctx.prev_content or {}
+    responses = {_squash_text(r.get("instruction")): r for r in ctx.content.get("feedback_response") or []
+                 if isinstance(r, dict) and r.get("status") == "not_applicable"}
     for td in ctx.todos:
+        resp = responses.get(_squash_text(td["instruction"]))
+        if resp:  # 员工说明该意见不适用：只有退回前检查已用数据核实的理由才放行，其余交审核人确认
+            checked = [i["msg"] for i in td.get("issues") or [] if i.get("kind") != "no_more_minutes"]
+            if checked:
+                reason = resolve(str(resp.get("reason", "")), ctx.flat)[0]  # 说明里的占位符换成数字，审核人直接看
+                details.append({"type": "note", "section": td["section"], "instruction": td["instruction"],
+                                "msg": f"员工说明意见“{td['instruction']}”不适用：{reason}"
+                                       f"（程序核实：{'；'.join(checked)}）"})
+            else:
+                reason = resolve(str(resp.get("reason", "")), ctx.flat)[0]
+                details.append({"type": "feedback_disputed", "section": td["section"], "instruction": td["instruction"],
+                                "msg": f"员工认为意见“{td['instruction']}”不适用：{reason}，程序无法用数据核实"})
+            continue
         if td.get("targets"):  # 要求说清某条异常的原因：逐条核对原因是否真的补充了依据
             details += _cause_feedback(ctx, td, prev)
             continue

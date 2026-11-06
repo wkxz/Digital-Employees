@@ -26,16 +26,25 @@ def draft_sections(report_cfg: dict[str, Any] | None) -> list[str]:
     return [s["id"] for s in report_cfg["sections"] if s.get("kind", "paragraphs") in TEXT_KINDS]
 
 
+# 员工对审核意见的说明（可选）：认为某条意见不适用时写 not_applicable 和理由，程序用数据核实后才放行
+FEEDBACK_RESPONSE = {"type": "array", "items": {
+    "type": "object", "required": ["instruction", "status", "reason"],
+    "properties": {"instruction": {"type": "string"}, "status": {"enum": ["done", "not_applicable"]},
+                   "reason": {"type": "string"}}}}
+
+
 def output_schema(purpose: str, report_cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     secs = draft_sections(report_cfg)
     if purpose == "analysis":
         return {"type": "object", "required": ["anomalies"],
-                "properties": {"anomalies": {"type": "array", "items": ANOMALY_ITEM}}}
+                "properties": {"anomalies": {"type": "array", "items": ANOMALY_ITEM}, "feedback_response": FEEDBACK_RESPONSE}}
     if purpose == "draft":
-        return {"type": "object", "required": secs, "properties": {k: _STR_LIST for k in secs}}
+        return {"type": "object", "required": secs,
+                "properties": {**{k: _STR_LIST for k in secs}, "feedback_response": FEEDBACK_RESPONSE}}
     if purpose == "fix":
         return {"type": "object", "required": secs + ["anomalies"],
-                "properties": {**{k: _STR_LIST for k in secs}, "anomalies": {"type": "array", "items": ANOMALY_ITEM}}}
+                "properties": {**{k: _STR_LIST for k in secs}, "anomalies": {"type": "array", "items": ANOMALY_ITEM},
+                               "feedback_response": FEEDBACK_RESPONSE}}
     raise KeyError(purpose)
 
 
@@ -216,6 +225,62 @@ def anomaly_targets(kpis: dict[str, Any], kws: list[str], minutes: list[dict[str
         rel = [m["no"] for m in minutes or []
                if any(t in (m.get("text") or "") or t in (m.get("header") or "") for t in tokens)]
         out.append({"id": a["id"], "label": a["label"], "minutes": rel})
+    return out
+
+
+class FeedbackCheck(Exception):
+    """退回前检查发现意见可能有误或无法落实：不流转，交审核人确认（改意见，或确认后仍退回）。"""
+
+    def __init__(self, issues: list[dict[str, Any]]):
+        self.issues = issues
+        super().__init__("；".join(i["msg"] for i in issues))
+
+
+_GENERIC_PLACES = {"门店", "各店", "全店", "新店", "老店", "本店", "该店", "区域", "大区", "片区", "各区", "本区", "该区", "全区",
+                   "商场店", "街边店", "社区店", "写字楼店"}
+
+
+def check_feedback(todos: list[dict[str, Any]], kpis: dict[str, Any], quality_checks: list[dict[str, Any]],
+                   content: dict[str, Any] | None = None, cause_words: list[str] | None = None) -> list[dict[str, Any]]:
+    """退回前用数据核对意见本身（不调用模型）：点名的区域 / 门店不在异常清单、认不出的区域 / 门店名、
+    要求写配置禁止的内容、相关纪要已全部引用。结果写入每条待办的 issues，返回全部问题。
+    审核人确认后仍可退回；员工据此说明“不适用”时，程序以这里的核实结果为准。"""
+    thr = kpis.get("threshold", 0.1)
+    rows = {r["name"]: r for d in ("region", "store") for r in kpis["tables"].get(d, [])}
+    known = set(entity_names(kpis))
+    forbidden = [pat for c in quality_checks if c["rule"] == "regex_forbidden" for pat in c.get("params", {}).get("patterns", [])]
+    cited = {it.get("id"): set(it.get("evidence") or []) for it in (content or {}).get("anomalies", [])}
+    words = cause_words or CAUSE_WORDS
+    out = []
+    for td in todos:
+        item, issues = td["instruction"], []
+        about_anomaly = td.get("section") == "anomalies" or any(w in item for w in words)
+        if about_anomaly:
+            for name in td.get("keywords", []):
+                if name in rows and not anomaly_targets(kpis, [name], None):
+                    issues.append({"kind": "not_anomaly", "entity": name,
+                                   "msg": f"{name}本周实收环比 {fmt_value('x_wow', rows[name].get('sales_wow'))}，"
+                                          f"未超过 ±{thr:.0%}，不在异常清单中"})
+        for m in re.finditer(r"[\u4e00-\u9fa5]{1,6}?[区店]", item):
+            w = m.group(0)
+            if w in _GENERIC_PLACES or any(n in w or w.rstrip("区") == n for n in known) \
+                    or any(sn in w for n in known for sn in _short_names(n)[1:]):
+                continue
+            if len(w) >= 3:
+                issues.append({"kind": "unknown_name", "entity": w,
+                               "msg": f"未识别到“{w}”，本周数据中没有这个区域 / 门店，请检查是否写错"})
+        for pat in forbidden:
+            if re.search(pat, item):
+                issues.append({"kind": "forbidden", "msg": f"按员工配置，周报不写“{pat}”（数据不支持或不允许），该意见无法落实"})
+        for t in td.get("targets", []):
+            rel = set(t.get("minutes") or [])
+            if rel and content is not None and rel <= cited.get(t["id"], set()):
+                nos = "、".join(f"第 {n} 条" for n in sorted(rel))
+                issues.append({"kind": "no_more_minutes", "msg": f"{t['label']}相关的纪要条目（{nos}）已全部引用，"
+                                                                    "纪要中没有更多依据，返工只能改写措辞"})
+        if issues:
+            td["issues"] = issues
+            out += [{**i, "instruction": item} for i in issues]
     return out
 
 
