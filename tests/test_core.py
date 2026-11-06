@@ -71,8 +71,16 @@ def test_week_parsing_and_cross_year():
     from mini_employee.periods import parse_week
     assert parse_week("2026年第44周").key == "2026-W44"
     assert parse_week("2027-W01").prev.key == "2026-W53"
+    assert parse_week("2026 W44").key == "2026-W44"
+    assert parse_week("2026-10-26~2026-11-01").key == "2026-W44"
+    assert parse_week("2026/10/26 至 2026/11/01").key == "2026-W44"
+    assert parse_week("2026年10月26日-2026年11月1日").key == "2026-W44"
     with pytest.raises(ValueError):
-        parse_week("第44周")
+        parse_week("第44周")  # 不带年份有歧义
+    with pytest.raises(ValueError, match="完整的 ISO 周"):
+        parse_week("2026-10-27~2026-11-02")  # 周二开始
+    with pytest.raises(ValueError):
+        parse_week("2026-02-30~2026-03-07")
 
 
 # ---------------------------------------------------------------- 占位符

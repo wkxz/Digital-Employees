@@ -298,6 +298,9 @@ def quality_lines(kpis: dict[str, Any], meta: dict[str, Any], minutes: list[dict
         return next((label for k, label in weeks.items() if d and span[k][0] <= d <= span[k][1]), None)
 
     lines = []
+    if meta.get("minutes_missing"):
+        lines.append("周会纪要：本次未上传周会纪要，异常原因无法引用纪要，均标注“原因待核实”；"
+                     "如需引用纪要说明原因，请上传对应周的纪要后重新发起任务。")
     ret = q.get("returns") or {}
     if ret.get("count"):
         t = f"退货：本周退货 {ret['count']} 笔，合计 {ret['amount']:,.0f} 元，已按负数直接冲减实收"

@@ -122,6 +122,9 @@ def validate(raw: dict[str, Any], skill_sections: dict[str, str]) -> tuple[list[
                         err(f"{where}的参数 {ref} 引用了不存在的表单字段")
                 elif not isinstance(raw.get(sec), dict) or (key and key not in raw[sec]):
                     err(f"{where}的参数 {ref} 引用了不存在的配置项")
+        sk = s.get("skip_if_empty")
+        if sk is not None and not (isinstance(sk, str) and sk.startswith("$form.") and sk[6:] in keys):
+            err(f"{where}的 skip_if_empty 须引用表单字段（如 $form.minutes_file），收到：{sk}")
         if st == "render" and s.get("tool") != "generate_report":
             err(f"{where}是 render 步骤，tool 须为 generate_report")
         if st == "agent":

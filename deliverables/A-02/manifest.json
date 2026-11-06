@@ -1,0 +1,20 @@
+{
+  "task_id": "T1101-224921-1700",
+  "version": 1,
+  "artifact": "v1",
+  "files": [
+    {
+      "name": "经营周报_2026W43.docx",
+      "sha256": "384e3185294cc976d1f47c5f5c1bcf2066918b53d2d966ae3b47848e72fcecf7"
+    },
+    {
+      "name": "qc_report.json",
+      "sha256": "fa2c1e70f5031cc77337a12fa836e9ec8c915fd0df0967c816d7117f7122f958"
+    },
+    {
+      "name": "质检记录.md",
+      "sha256": "bfa3ef7d4ae31abb9cf0d7d530d74fa0f595a35a35f94bc47f907b4f1b0090da"
+    }
+  ],
+  "delivered_at": "2026-11-01 22:49:26"
+}
