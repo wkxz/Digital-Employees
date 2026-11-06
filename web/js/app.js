@@ -55,7 +55,7 @@
       return data;
     },
     get: (p) => API.call("GET", p),
-    post: (p, b) => API.call("POST", p, { ...(b || {}), user: S.users[S.role],
+    post: (p, b) => API.call("POST", p, { role: S.role, ...(b || {}), user: S.users[S.role],
       ...(p === "/api/config" || p === "/api/faults" ? { admin_password: S.adminPw } : {}) }),
   };
 
@@ -374,6 +374,8 @@
       case "feedback_parsed": return `审核意见拆成 ${(p.todos || []).length} 条待办（V${p.version}）`;
       case "delivered": return `生成交付包 · ${(p.files || []).length} 个文件`;
       case "task_created": return `发起任务 · 统计周期 ${(p.form && p.form.period) || "—"}`;
+      case "form_changed": return `修改表单：${Object.entries(p.fields || {}).map(([k, c]) => `${k} ${c.from || "—"} → ${c.to}`).join("；")}${p.by ? "（" + p.by + "）" : ""}`;
+      case "material_waived": return `发起人确认没有：${(p.fields || []).join("、")}${p.by ? "（" + p.by + "）" : ""}，继续执行`;
       case "task_resumed": return `断点恢复，从「${L(p.state)}」继续${p.reason ? "：" + p.reason : ""}`;
       case "admission_checked": return `准入检查${p.problems && p.problems.length ? "：" + p.problems.join("；") : "完成"}`;
       case "form_validated": return "表单校验通过";
@@ -626,6 +628,7 @@
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = $("#nsubmit", form);
+      if (S.role !== "initiator") { FX.toast("只有发起人可以发起任务，请先在右上角切换为“发起人”", "err"); return; }
       const body = { values: Object.fromEntries(Object.entries(values).filter(([, v]) => v)), use_sample: useSample, faults: [...chosen] };
       busy(btn, true);
       try {
@@ -743,16 +746,37 @@
       card.className = "card";
       card.style.marginTop = "18px";
       const emp = S.meta.employee;
-      if (t.state === "WAITING_INPUT" && emp) {
+      if (t.state === "WAITING_INPUT" && emp && S.role !== "initiator") {
+        card.innerHTML = `<div class="card-title"><span class="dot" style="background:var(--amber)"></span>补充材料</div>
+          <p class="muted" style="margin:0">补充材料、修改统计周期需由发起人操作，可在右上角切换为“发起人”。</p>`;
+        box.appendChild(card);
+      } else if (t.state === "WAITING_INPUT" && emp) {
         const store = {};
         card.innerHTML = `<div class="card-title"><span class="dot" style="background:var(--amber)"></span>补充材料</div><p class="muted" style="margin-top:0;font-size:14px">销售明细可只上传缺少的部分（如上周数据），会与已上传的数据自动合并。补充后从暂停处继续，不需要重新发起。</p><div class="grid g2" id="supz"></div>
           <button class="btn btn-primary" id="supbtn">${roll("提交补充材料")}<span class="arrow">${I.arrow}</span></button>`;
         const fields = {};
+        emp.form.filter((f) => f.type === "iso_week").forEach((f) => {
+          const el = document.createElement("div");
+          el.className = "field";
+          el.style.gridColumn = "1/-1";
+          el.innerHTML = `<div class="field-label"><b>${esc(f.label)}</b><span class="faint">填错了可直接修改，修改后重新准入校验</span></div>
+            <div class="input-line"><input type="text" spellcheck="false" value="${esc(t.form && t.form[f.key] || t.period || "")}"></div><div class="hint"></div>`;
+          const input = el.querySelector("input"), hint = el.querySelector(".hint"), line = el.querySelector(".input-line");
+          const orig = input.value;
+          input.addEventListener("input", () => {
+            const v = input.value.trim(), w = isoWeek(v);
+            if (v && v !== orig) fields[f.key] = v; else delete fields[f.key];
+            line.classList.toggle("bad", !!v && (!w || !!w.bad));
+            hint.className = "hint " + (!v || v === orig ? "" : w && !w.bad ? "ok" : "bad");
+            hint.textContent = !v || v === orig ? "" : w && !w.bad ? "✓ 改为 " + w.label : (w && w.bad) || "格式应为 2026-W44、2026年第44周 或 2026-10-26~2026-11-01";
+          });
+          $("#supz", card).appendChild(el);
+        });
         emp.form.filter((f) => f.type === "file").forEach((f) => $("#supz", card).appendChild(dropZone(f, store)));
         emp.form.filter((f) => f.waivable).forEach((f) => $("#supz", card).after(waiveToggle(f, fields)));
         $("#supbtn", card).addEventListener("click", async (e) => {
           const btn = e.currentTarget;
-          const ok = await act(btn, async () => API.post(`/api/tasks/${id}/supplement`, { files: await packFiles(store), fields, role: S.role }), "已提交补充材料，重新准入");
+          const ok = await act(btn, async () => API.post(`/api/tasks/${id}/supplement`, { files: await packFiles(store), fields, role: S.role }), fields.period ? "已修改统计周期并提交，重新准入" : "已提交补充材料，重新准入");
           if (ok) refresh();
         });
         box.appendChild(card);
@@ -851,6 +875,7 @@
     pushEvents(events.slice(-40), false);
     renderPipe();
     onState(true);
+    scope.listen(window, "rolechange", renderActions);
     prevState = t.state;
     renderKpi();
 

@@ -120,13 +120,24 @@ class Orchestrator:
         # 锁定配置：复制一份到任务目录，之后有人改配置也不影响这个任务
         sha = config_admin.snapshot(self.store, employee_id, self.task_dir(tid))
         emp = load_employee(employee_id, self.task_dir(tid) / "config")
-        form = {k: v for k, v in values.items() if v not in (None, "")}
+        form = self._normalize(emp, {k: v for k, v in values.items() if v not in (None, "")})
         names: dict[str, Any] = {}
         self._put_files(tid, emp, form, names, files, append=False)
         self.store.create_task(employee_id, form, {**(meta or {}), "file_names": names, "created_by": user,
                                                    "config_sha": sha}, tid=tid)
         self.store.event(tid, "config_snapshot", None, {"employee": employee_id, "config_sha": sha})
         return tid
+
+    @staticmethod
+    def _normalize(emp: Employee, form: dict[str, Any]) -> dict[str, Any]:
+        """周期类字段能解析的改成规范写法；解析不了的保持原样，由表单校验给出原因。"""
+        for f in emp.form:
+            if f["type"] == "iso_week" and isinstance(form.get(f["key"]), str):
+                try:
+                    form[f["key"]] = parse_week(form[f["key"]]).key
+                except ValueError:
+                    pass
+        return form
 
     @staticmethod
     def waived(form: dict[str, Any], fld: dict[str, Any]) -> bool:
@@ -337,8 +348,15 @@ class Orchestrator:
             mw = (minutes.get("meta") or {}).get("week")
             my = (minutes.get("meta") or {}).get("year")
             if mw and (mw != week.week or (my and my != week.year)):
-                problems.append(f"上传的周会纪要是{f'{my} 年' if my else ''}第 {mw} 周的（{minutes['meta']['title']}），"
-                                f"与统计周期 {week.key} 不一致，请上传第 {week.week} 周的周会纪要")
+                got = f"{f'{my} 年' if my else ''}第 {mw} 周"
+                msg = (f"上传的周会纪要是{got}的（{minutes['meta']['title']}），与统计周期 {week.key}"
+                       f"（{week.year} 年第 {week.week} 周）不一致")
+                if my and mw == week.week and my != week.year:
+                    msg += (f"。纪要与统计周期周号相同、年份不同，请先确认统计周期的年份是否填错"
+                            f"（如应为 {my}-W{mw:02d}，可在补充材料处直接修改统计周期）")
+                else:
+                    msg += f"，请上传 {week.year} 年第 {week.week} 周的周会纪要，或修改统计周期"
+                problems.append(msg)
             else:
                 passed.append(f"周会纪要已检查通过（{minutes['count']} 条）")
         if problems:
@@ -703,8 +721,16 @@ class Orchestrator:
         """补充材料或字段；fields 含 waive_<key> 时表示发起人确认没有该材料，记录确认人。"""
         task = self.store.get(tid)
         emp = self._emp(task)
+        allowed = ({f["key"] for f in emp.form if f["type"] != "file"}
+                   | {f"waive_{f['key']}" for f in emp.form if f.get("waivable")})
+        unknown = [k for k in fields or {} if k not in allowed]
+        if unknown:
+            raise ValueError(f"不能补充的字段：{'、'.join(unknown)}（只能修改表单字段，或确认没有可跳过的材料）")
         form, names = dict(task["form"]), dict(task["meta"].get("file_names", {}))
         self._put_files(tid, emp, form, names, files or {}, append=True)
+        fields = self._normalize(emp, {k: v for k, v in (fields or {}).items() if v not in (None, "")}) or None
+        changed = {k: {"from": task["form"].get(k), "to": v} for k, v in (fields or {}).items()
+                   if not k.startswith("waive_") and task["form"].get(k) != v}
         form.update(fields or {})
         meta = {**task["meta"], "file_names": names}
         if any(k.startswith("waive_") for k in fields or {}):
@@ -712,6 +738,8 @@ class Orchestrator:
         self.store.transition(tid, "supplement", actor, {"files": files, "fields": fields, "user": user,
                                                          "reason": f"补充：{', '.join([*(files or {}), *(fields or {})])}"},
                               form=form, meta=meta)
+        if changed:  # 改了统计周期等字段：记录改动；之前的步骤结果因输入变化不会被复用
+            self.store.event(tid, "form_changed", None, {"fields": changed, "by": user or task["meta"].get("created_by")})
         return self.drive(tid) if run else S.ADMISSION
 
     def retry(self, tid: str, actor: str = INITIATOR, clear_faults: bool = False, run: bool = True,

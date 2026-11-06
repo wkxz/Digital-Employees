@@ -294,6 +294,8 @@ def api_review(tid: str) -> dict[str, Any]:
 
 
 def api_create(body: dict[str, Any]) -> dict[str, Any]:
+    if (body.get("role") or INITIATOR) != INITIATOR:
+        raise ApiError("只有发起人可以发起任务，请先在右上角切换为“发起人”", 403)
     o = orch()
     emp = load_employee(EMP_ID)
     values = {k: v for k, v in (body.get("values") or {}).items() if isinstance(v, str)}
@@ -324,8 +326,13 @@ def api_action(tid: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
     if action == "supplement":
         emp = load_employee(EMP_ID)
         paths = files_from(body, emp)
-        fields = {k: "1" for k, v in (body.get("fields") or {}).items() if k.startswith("waive_") and v}
-        o.supplement(tid, paths, fields or None, actor=role, run=False, user=user)
+        # 可补充的字段（统计周期等表单字段、确认没有可跳过的材料）由 orchestrator 按员工配置校验
+        fields = {k: ("1" if k.startswith("waive_") else v.strip()) for k, v in (body.get("fields") or {}).items()
+                  if isinstance(v, str) and v.strip()}
+        try:
+            o.supplement(tid, paths, fields or None, actor=role, run=False, user=user)
+        except ValueError as e:
+            raise ApiError(str(e)) from e
         run_bg(tid)
     elif action == "retry":
         o.retry(tid, role, clear_faults=bool(body.get("clear_faults", True)), run=False)

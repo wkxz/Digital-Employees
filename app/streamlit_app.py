@@ -180,6 +180,9 @@ def content_markdown(d: Path, rel: str, t: dict) -> list[str]:
 if page == "发起任务":
     st.header("发起任务")
     st.caption(emp.raw.get("description", ""))
+    if role != INITIATOR:  # 发起人记入任务，之后用于“不能审核自己发起的任务”
+        st.info("只有发起人可以发起任务，请在左侧把“当前身份”切换为发起人。")
+        st.stop()
     with st.form("new"):
         values, files = {}, {}
         for fld in emp.form:
@@ -241,6 +244,10 @@ elif page == "任务中心":
         if t["state"] == S.WAITING_INPUT:
             st.subheader("补充材料")
             st.caption("销售明细可只上传缺少的部分（如上周数据），会与已上传的数据自动合并。")
+            # 统计周期等表单字段填错了可直接修改，改后重新准入校验，不需要取消重来
+            edits = {f["key"]: v.strip() for f in emp.form if f["type"] == "iso_week"
+                     for v in [st.text_input(f"{f['label']}（填错可直接修改）", t["form"].get(f["key"], ""), key=f"se_{f['key']}")]
+                     if v.strip() and v.strip() != t["form"].get(f["key"])}
             ups = {f["key"]: st.file_uploader(f["label"], type=f.get("ext"), key=f"sup_{f['key']}",
                                               accept_multiple_files=bool(f.get("multiple")))
                    for f in emp.form if f["type"] == "file"}
@@ -250,7 +257,7 @@ elif page == "任务中心":
             if st.button("提交补充材料", type="primary"):
                 paths = {k: ([save_upload(x) for x in f] if isinstance(f, list) else save_upload(f))
                          for k, f in ups.items() if f}
-                if act(o.supplement, tid, paths, waive or None, actor=role, run=False, user=user):
+                if act(o.supplement, tid, paths, {**edits, **waive} or None, actor=role, run=False, user=user):
                     run_bg(tid)
                     st.rerun()
         if t["state"] == S.SUSPENDED:

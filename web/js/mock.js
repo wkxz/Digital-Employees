@@ -381,6 +381,7 @@
       if (path === "/api/config") return { "employee.yaml": CONFIG_YAML, "SKILL.md": CONFIG_SKILL };
     } else {
       if (path === "/api/tasks") {
+        if ((body.role || "initiator") !== "initiator") throw { status: 403, error: "只有发起人可以发起任务，请先在右上角切换为“发起人”" };
         const files = {};
         Object.entries(body.files || {}).forEach(([k, v]) => { if (v && v.length) files[k] = k === "sales_file" ? v.map((x) => x.name) : v[v.length - 1].name; });
         if (body.use_sample) {
@@ -399,7 +400,7 @@
         else if (m[2] === "supplement") {
           reject(t, "supplement", role);
           Object.entries(body.files || {}).forEach(([k, v]) => { if (v && v.length) t.file_names[k] = k === "sales_file" ? (t.file_names[k] || []).concat(v.map((x) => x.name)) : v[v.length - 1].name; });
-          Object.keys(body.fields || {}).filter((k) => k.startsWith("waive_")).forEach((k) => { t.form[k] = "1"; });
+          Object.entries(body.fields || {}).forEach(([k, v]) => { if (v) t.form[k] = k.startsWith("waive_") ? "1" : String(v).toUpperCase(); });
           go(t, "supplement", "ADMISSION", role, "补充：" + Object.keys({ ...(body.files || {}), ...(body.fields || {}) }).join(", "));
           setTimeout(() => drive(t, false), 50);
         } else if (m[2] === "retry") {
