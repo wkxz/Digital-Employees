@@ -87,6 +87,8 @@ def validate(raw: dict[str, Any], skill_sections: dict[str, str]) -> tuple[list[
             err(f"{where}的 section “{f['section']}” 不是由模型撰写的章节，可选 {sorted(text_sections)}")
         if f.get("section") and t not in ("enum", "string"):
             warn(f"{where}配置了 section，但只有 enum / string 字段会自动加质检")
+        if f.get("waivable") and not (t == "file" and f.get("required") and isinstance(f["waivable"], str)):
+            err(f"{where}的 waivable 只用于必填的 file 字段，值为勾选框上的说明文字")
     dup = sorted({k for k in keys if k and keys.count(k) > 1})
     if dup:
         err(f"form 中字段 key 重复：{dup}")

@@ -1,0 +1,15 @@
+id: M07
+name: 缺周会纪要 → 暂停 → 发起人确认本周没有纪要 → 照常生成，原因全部标注待核实，数据质量说明写明
+category: 缺材料
+input:
+  period: 2026-W44
+  files: {sales_file: data/official_a/销售明细.xlsx}
+steps:
+  - expect: {state: WAITING_INPUT, pause_contains: 缺少材料：周会纪要}
+  - supplement: {fields: {waive_minutes_file: "1"}}
+  - expect:
+      state: PENDING_REVIEW
+      report_contains: ["573,635 元", 原因待核实, 发起人确认本周没有周会纪要]
+      events: [material_waived]
+  - review: {decision: approve}
+  - expect: {state: DELIVERED}

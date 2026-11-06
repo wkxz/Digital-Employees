@@ -27,16 +27,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-import yaml
-
-from mini_employee.config import EMPLOYEES_DIR, ROOT, load_employee, parse_skill_md, read_employee_files, runs_dir
+from mini_employee import config_admin
+from mini_employee.config import EMPLOYEES_DIR, ROOT, load_employee, read_employee_files, runs_dir
 from mini_employee.fsutil import read_json
 from mini_employee.orchestrator import Orchestrator
 from mini_employee.qc.rules import RULES
 from mini_employee.render import build_blocks, write_md
 from mini_employee.states import INITIATOR, LABELS, REVIEWER, SYSTEM, TERMINAL, TRANSITIONS, S
 from mini_employee.store import IllegalTransition
-from mini_employee.validate import ConfigError, validate
+from mini_employee.validate import ConfigError
 
 EMP_ID = "weekly_report"
 WEB_DIR = ROOT / "web"
@@ -217,7 +216,8 @@ def api_meta() -> dict[str, Any]:
     out: dict[str, Any] = {"model": model_name(), "runs_dir": str(runs_dir()), "states": {s.value: LABELS[s] for s in S},
                            "terminal": [s.value for s in TERMINAL], "transitions": transitions_json(),
                            "faults": FAULT_OPTIONS, "roles": {INITIATOR: "发起人", REVIEWER: "审核人", SYSTEM: "系统"},
-                           "sample_available": all(p.exists() for p in SAMPLE.values())}
+                           "sample_available": all(p.exists() for p in SAMPLE.values()),
+                           "admin_configured": config_admin.admin_configured()}
     try:
         emp = load_employee(EMP_ID)
         out["employee"] = {"id": EMP_ID, "name": emp.raw.get("name", ""), "description": emp.raw.get("description", ""),
@@ -300,23 +300,32 @@ def api_create(body: dict[str, Any]) -> dict[str, Any]:
     paths = files_from(body, emp)
     if body.get("use_sample"):
         for k, p in SAMPLE.items():
-            paths.setdefault(k, [p] if any(f["key"] == k and f.get("multiple") for f in emp.form) else p)
+            if not values.get(f"waive_{k}"):  # 发起人确认没有这份材料时不用样例补上
+                paths.setdefault(k, [p] if any(f["key"] == k and f.get("multiple") for f in emp.form) else p)
     by_id = {f["id"]: f for f in FAULT_OPTIONS}
     faults = [{"tool": by_id[x]["tool"], "mode": by_id[x]["mode"]} for x in body.get("faults") or [] if x in by_id]
-    tid = o.create(EMP_ID, values, paths, {"faults": faults})
+    tid = o.create(EMP_ID, values, paths, {"faults": faults}, user=user_of(body))
     run_bg(tid)
     return {"id": tid}
+
+
+def user_of(body: dict[str, Any]) -> str | None:
+    """界面填写的姓名：用于留痕和“发起人不能审核自己发起的任务”。"""
+    u = body.get("user")
+    return (u.strip() or None) if isinstance(u, str) else None
 
 
 def api_action(tid: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
     o = orch()
     role = body.get("role") or INITIATOR
+    user = user_of(body)
     if role not in (INITIATOR, REVIEWER):
         raise ApiError("未知身份")
     if action == "supplement":
         emp = load_employee(EMP_ID)
         paths = files_from(body, emp)
-        o.supplement(tid, paths, None, actor=role, run=False)
+        fields = {k: "1" for k, v in (body.get("fields") or {}).items() if k.startswith("waive_") and v}
+        o.supplement(tid, paths, fields or None, actor=role, run=False, user=user)
         run_bg(tid)
     elif action == "retry":
         o.retry(tid, role, clear_faults=bool(body.get("clear_faults", True)), run=False)
@@ -328,9 +337,9 @@ def api_action(tid: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
         o.cancel(tid, role)
     elif action == "review":
         if body.get("decision") == "approve":
-            o.review(tid, "approve", reviewed_sha256=body.get("sha256"), actor=role)
+            o.review(tid, "approve", reviewed_sha256=body.get("sha256"), actor=role, user=user)
         else:
-            o.review(tid, "changes", str(body.get("comments") or ""), actor=role, run=False)
+            o.review(tid, "changes", str(body.get("comments") or ""), actor=role, run=False, user=user)
             run_bg(tid)
     else:
         raise ApiError(f"未知操作 {action}", 404)
@@ -347,6 +356,9 @@ def api_faults_get() -> list[dict[str, Any]]:
 
 
 def api_faults_set(body: dict[str, Any]) -> list[dict[str, Any]]:
+    if not config_admin.check_admin(body.get("admin_password")):
+        raise ApiError("开关全局故障需要管理员口令" if config_admin.admin_configured()
+                       else "未设置管理员口令（.env 中的 MINI_ADMIN_PASSWORD），全局故障注入不可用", 403)
     by_id = {f["id"]: f for f in FAULT_OPTIONS}
     cur = [{"tool": by_id[x]["tool"], "mode": by_id[x]["mode"]} for x in body.get("ids") or [] if x in by_id]
     faults_path().write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
@@ -360,21 +372,16 @@ def api_config_get() -> dict[str, Any]:
 
 
 def api_config_save(body: dict[str, Any]) -> dict[str, Any]:
-    """与 Streamlit 界面相同：先校验改后的整套配置，通过了才写盘。"""
+    """与 Streamlit 界面相同：只校验时任何人可用；保存须管理员口令，校验通过才写盘，并记录修改人、说明和改前改后全文。"""
     name, text = body.get("name"), body.get("text")
-    if name not in ("employee.yaml", "SKILL.md") or not isinstance(text, str):
+    if name not in config_admin.editable_files(EMP_ID) or not isinstance(text, str):
         raise ApiError("只能保存 employee.yaml 或 SKILL.md")
-    d = EMPLOYEES_DIR / EMP_ID
-    try:
-        is_yaml = name.endswith(".yaml")
-        raw = yaml.safe_load(text if is_yaml else (d / "employee.yaml").read_text(encoding="utf-8")) or {}
-        skill = (d / "SKILL.md").read_text(encoding="utf-8") if is_yaml else text
-        errors, warnings = validate(raw, parse_skill_md(skill)[1])
-    except Exception as e:  # noqa: BLE001  YAML 语法错误
-        errors, warnings = [f"{type(e).__name__}: {e}"], []
-    if not errors and body.get("save", True):
-        (d / name).write_text(text, encoding="utf-8", newline="\n")
-    return {"saved": not errors and body.get("save", True), "errors": errors, "warnings": warnings}
+    if not body.get("save", True):
+        errors, warnings = config_admin.validate_texts(EMP_ID, name, text)
+        return {"saved": False, "errors": errors, "warnings": warnings, "seq": None}
+    errors, warnings, seq = config_admin.save(orch().store, EMP_ID, name, text, user_of(body) or "管理员",
+                                              body.get("admin_password"), str(body.get("note") or ""))
+    return {"saved": seq is not None, "errors": errors, "warnings": warnings, "seq": seq}
 
 
 # ---------------------------------------------------------------- HTTP

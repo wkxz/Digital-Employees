@@ -128,6 +128,11 @@ class Orchestrator:
         self.store.event(tid, "config_snapshot", None, {"employee": employee_id, "config_sha": sha})
         return tid
 
+    @staticmethod
+    def waived(form: dict[str, Any], fld: dict[str, Any]) -> bool:
+        """发起人明确确认没有这份材料（只对配置了 waivable 的必填文件生效）：表单值 waive_<key> 为真。"""
+        return bool(fld.get("waivable")) and str(form.get(f"waive_{fld['key']}") or "").lower() in ("1", "true", "yes", "是")
+
     def _save_input(self, tid: str, key: str, src: Path) -> tuple[str, str]:
         d = self.task_dir(tid) / "inputs" / key
         d.mkdir(parents=True, exist_ok=True)
@@ -253,8 +258,16 @@ class Orchestrator:
             return
         adm = emp.admission
         have = lambda key: [v for v in self._as_list(task["form"].get(key)) if not v.startswith("missing:")]  # noqa: E731
-        missing = [f["label"] for f in emp.form if f["type"] == "file" and f.get("required") and not have(f["key"])]
+        absent = [f for f in emp.form if f["type"] == "file" and f.get("required") and not have(f["key"])]
+        waived = [f for f in absent if self.waived(task["form"], f)]
+        missing = [f["label"] for f in absent if f not in waived]
         problems: list[str] = [f"缺少材料：{'、'.join(missing)}，请上传"] if missing else []
+        if missing and any(f.get("waivable") for f in absent):
+            problems[0] += "（" + "；".join(f"如{f['waivable']}，可勾选后继续" for f in absent if f.get("waivable")) + "）"
+        if waived and not resumed:
+            self.store.event(tid, "material_waived", "admission",
+                             {"fields": [f["label"] for f in waived], "by": task["meta"].get("waived_by")
+                              or task["meta"].get("created_by"), "reason": "发起人确认没有该材料，继续执行"})
         passed: list[str] = []
         reject = adm.get("pii_policy", "reject") == "reject"
         gw = self._gateway(task, emp)
@@ -434,7 +447,7 @@ class Orchestrator:
         """可选材料未上传（如周会纪要）：不调用工具，写一份空结果，后续步骤按“没有这份材料”处理。"""
         if step["tool"] == "read_minutes":
             write_json(self.task_dir(task["id"]) / "work" / "minutes.json", [])
-            return {"count": 0, "paragraphs": [], "has_pii": False, "masked": 0, "meta": {}, "skipped": "未上传周会纪要"}
+            return {"count": 0, "paragraphs": [], "has_pii": False, "masked": 0, "meta": {}, "skipped": "发起人确认本周没有周会纪要"}
         return {"skipped": f"未提供 {step['skip_if_empty']}"}
 
     def _report_meta(self, task: dict, emp: Employee, version: int) -> dict[str, Any]:
@@ -686,15 +699,19 @@ class Orchestrator:
         self.store.event(tid, "delivered", None, {"dir": str(out.relative_to(d)), "files": files})
 
     def supplement(self, tid: str, files: dict[str, str | Path] | None = None, fields: dict[str, Any] | None = None,
-                   actor: str = INITIATOR, run: bool = True) -> S:
+                   actor: str = INITIATOR, run: bool = True, user: str | None = None) -> S:
+        """补充材料或字段；fields 含 waive_<key> 时表示发起人确认没有该材料，记录确认人。"""
         task = self.store.get(tid)
         emp = self._emp(task)
         form, names = dict(task["form"]), dict(task["meta"].get("file_names", {}))
         self._put_files(tid, emp, form, names, files or {}, append=True)
         form.update(fields or {})
-        self.store.transition(tid, "supplement", actor, {"files": files, "fields": fields,
+        meta = {**task["meta"], "file_names": names}
+        if any(k.startswith("waive_") for k in fields or {}):
+            meta["waived_by"] = user or task["meta"].get("created_by")
+        self.store.transition(tid, "supplement", actor, {"files": files, "fields": fields, "user": user,
                                                          "reason": f"补充：{', '.join([*(files or {}), *(fields or {})])}"},
-                              form=form, meta={**task["meta"], "file_names": names})
+                              form=form, meta=meta)
         return self.drive(tid) if run else S.ADMISSION
 
     def retry(self, tid: str, actor: str = INITIATOR, clear_faults: bool = False, run: bool = True,

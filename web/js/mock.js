@@ -69,7 +69,9 @@
       form: [
         { key: "period", label: "统计周期", type: "iso_week", required: true, help: "如 2026-W44 或 2026年第44周" },
         { key: "sales_file", label: "销售明细", type: "file", ext: ["xlsx", "csv"], required: true, multiple: true },
-        { key: "minutes_file", label: "周会纪要", type: "file", ext: ["docx", "md"], required: false, help: "建议上传：异常原因优先引用纪要；未上传时照常生成，原因均标注“待核实”" },
+        { key: "minutes_file", label: "周会纪要", type: "file", ext: ["docx", "md"], required: true,
+          waivable: "本周没有周会纪要，继续生成（异常原因均标注“原因待核实”）",
+          help: "异常原因优先引用纪要。确实没有纪要时可勾选“本周没有周会纪要”继续生成" },
         { key: "master_file", label: "主数据", type: "file", ext: ["xlsx"], required: false, help: "可选：门店信息、商品信息、销售目标工作表（可只含其中几张）。门店新开或目标调整时上传，优先于系统自带的主数据" },
         { key: "focus_region", label: "重点关注区域", type: "enum", options: ["华东", "华南", "华北", "西南"], required: false, guide: "在“核心指标”中单独写一句该区域的实收、环比和目标达成率", section: "overall" },
       ],
@@ -174,6 +176,9 @@
         }
         const problems = [];
         if (!t.file_names.sales_file) problems.push("缺少材料：销售明细，请上传");
+        if (!t.file_names.minutes_file && t.form.waive_minutes_file !== "1")
+          problems.push("缺少材料：周会纪要，请上传（如本周没有周会纪要，继续生成（异常原因均标注“原因待核实”），可勾选后继续）");
+        else if (!t.file_names.minutes_file) ev(t, "material_waived", "admission", { fields: ["周会纪要"], reason: "发起人确认没有该材料，继续执行" });
         if (t.file_names.sales_file && w > 44) problems.push(`销售数据实际覆盖 2026-08-31 至 2026-11-01，不包含统计周期 2026-W${w}，无法生成该周周报。请上传包含该周的销售数据，或改选数据范围内的周期`);
         if (t.file_names.sales_file && w === 36) problems.push("缺少上一周（2026-W35，2026-08-24~2026-08-30）的销售数据，无法计算环比。请补充上传（可只上传上周数据，系统会与已上传的数据自动合并）");
         ev(t, "admission_checked", "admission", { problems, sales: { rows: 45213, date_range: ["2026-08-31", "2026-11-01"] } });
@@ -378,7 +383,10 @@
       if (path === "/api/tasks") {
         const files = {};
         Object.entries(body.files || {}).forEach(([k, v]) => { if (v && v.length) files[k] = k === "sales_file" ? v.map((x) => x.name) : v[v.length - 1].name; });
-        if (body.use_sample) { files.sales_file = files.sales_file || ["销售明细.xlsx"]; files.minutes_file = files.minutes_file || "周会纪要_2026W44.docx"; }
+        if (body.use_sample) {
+          files.sales_file = files.sales_file || ["销售明细.xlsx"];
+          if ((body.values || {}).waive_minutes_file !== "1") files.minutes_file = files.minutes_file || "周会纪要_2026W44.docx";
+        }
         const faults = (body.faults || []).map((id) => FAULTS.find((f) => f.id === id)).filter(Boolean).map(({ tool, mode }) => ({ tool, mode }));
         const t = newTask(Object.fromEntries(Object.entries(body.values || {}).filter(([, v]) => v)), files, faults);
         setTimeout(() => drive(t, false), 50);
@@ -391,7 +399,8 @@
         else if (m[2] === "supplement") {
           reject(t, "supplement", role);
           Object.entries(body.files || {}).forEach(([k, v]) => { if (v && v.length) t.file_names[k] = k === "sales_file" ? (t.file_names[k] || []).concat(v.map((x) => x.name)) : v[v.length - 1].name; });
-          go(t, "supplement", "ADMISSION", role, "补充：" + Object.keys(body.files || {}).join(", "));
+          Object.keys(body.fields || {}).filter((k) => k.startsWith("waive_")).forEach((k) => { t.form[k] = "1"; });
+          go(t, "supplement", "ADMISSION", role, "补充：" + Object.keys({ ...(body.files || {}), ...(body.fields || {}) }).join(", "));
           setTimeout(() => drive(t, false), 50);
         } else if (m[2] === "retry") {
           reject(t, "retry", role);

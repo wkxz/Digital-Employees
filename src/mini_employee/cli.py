@@ -70,10 +70,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--as", dest="actor", default=REVIEWER)
     p.add_argument("--user", default=os.environ.get("MINI_USER"), help="审核人姓名（不能审核自己发起的任务）")
 
-    p = sub.add_parser("supplement", help="补充材料")
+    p = sub.add_parser("supplement", help="补充材料（确认没有某份材料：--field waive_minutes_file=1）")
     p.add_argument("task")
     p.add_argument("--file", action="append")
     p.add_argument("--field", action="append")
+    p.add_argument("--user", default=os.environ.get("MINI_USER"), help="操作人姓名（确认跳过材料时记录）")
 
     p = sub.add_parser("recheck", help="人工修改内容后重新质检")
     p.add_argument("task")
@@ -136,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
                 o.review(a.task, "changes", a.changes, actor=a.actor, user=a.user)
             _show(o, a.task)
         elif a.cmd == "supplement":
-            o.supplement(a.task, _kv(a.file), _kv(a.field))
+            o.supplement(a.task, _kv(a.file), _kv(a.field), user=a.user)
             _show(o, a.task)
         elif a.cmd == "retry":
             o.retry(a.task, a.actor, clear_faults=a.clear_faults, refresh_config=a.refresh_config)

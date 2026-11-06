@@ -299,7 +299,7 @@ def quality_lines(kpis: dict[str, Any], meta: dict[str, Any], minutes: list[dict
 
     lines = []
     if meta.get("minutes_missing"):
-        lines.append("周会纪要：本次未上传周会纪要，异常原因无法引用纪要，均标注“原因待核实”；"
+        lines.append("周会纪要：发起人确认本周没有周会纪要，异常原因无法引用纪要，均标注“原因待核实”；"
                      "如需引用纪要说明原因，请上传对应周的纪要后重新发起任务。")
     ret = q.get("returns") or {}
     if ret.get("count"):

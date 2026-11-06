@@ -185,8 +185,10 @@ if page == "发起任务":
         for fld in emp.form:
             label = fld["label"] + (" *" if fld.get("required") else "")
             if fld["type"] == "file":
-                files[fld["key"]] = st.file_uploader(label, type=fld.get("ext"), key=fld["key"],
+                files[fld["key"]] = st.file_uploader(label, type=fld.get("ext"), key=fld["key"], help=fld.get("help"),
                                                      accept_multiple_files=bool(fld.get("multiple")))
+                if fld.get("waivable") and st.checkbox(fld["waivable"], key=f"waive_{fld['key']}"):
+                    values[f"waive_{fld['key']}"] = "1"
             elif fld["type"] == "enum":
                 values[fld["key"]] = st.selectbox(label, [""] + fld["options"])
             else:
@@ -206,7 +208,7 @@ if page == "发起任务":
                 paths[k] = [save_upload(x) for x in f]
             elif f and not isinstance(f, list):
                 paths[k] = save_upload(f)
-            elif use_sample and k in sample:
+            elif use_sample and k in sample and not values.get(f"waive_{k}"):
                 paths[k] = sample[k]
         faults = [{"tool": x.split(":")[0], "mode": x.split(":")[1]} for x in fs]
         tid = act(o.create, EMP_ID, values, paths, {"faults": faults}, user=user)
@@ -242,10 +244,13 @@ elif page == "任务中心":
             ups = {f["key"]: st.file_uploader(f["label"], type=f.get("ext"), key=f"sup_{f['key']}",
                                               accept_multiple_files=bool(f.get("multiple")))
                    for f in emp.form if f["type"] == "file"}
+            # 必填但允许发起人确认“没有这份材料”的（如本周没开周会），可不上传、勾选后继续
+            waive = {f"waive_{f['key']}": "1" for f in emp.form
+                     if f.get("waivable") and not t["form"].get(f["key"]) and st.checkbox(f["waivable"], key=f"sw_{f['key']}")}
             if st.button("提交补充材料", type="primary"):
                 paths = {k: ([save_upload(x) for x in f] if isinstance(f, list) else save_upload(f))
                          for k, f in ups.items() if f}
-                if act(o.supplement, tid, paths, None, actor=role, run=False):
+                if act(o.supplement, tid, paths, waive or None, actor=role, run=False, user=user):
                     run_bg(tid)
                     st.rerun()
         if t["state"] == S.SUSPENDED:

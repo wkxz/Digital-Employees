@@ -31,6 +31,10 @@
 
   const S = { meta: null, mock: false, tasks: [], faults: [], role: "initiator" };
   try { S.role = localStorage.getItem("me-role") || "initiator"; } catch (e) { /* 隐私模式 */ }
+  // 姓名用于留痕和“发起人不能审核自己发起的任务”；管理员口令只留在本页内存里，保存配置、开关全局故障时随请求发送
+  S.users = { initiator: "张三", reviewer: "李四" };
+  try { for (const r in S.users) S.users[r] = localStorage.getItem("me-user-" + r) || S.users[r]; } catch (e) { /* ignore */ }
+  S.adminPw = "";
   const L = (s) => (S.meta && S.meta.states[s]) || s || "断点";
 
   /* ------------------------------------------------------------ 接口 */
@@ -51,7 +55,8 @@
       return data;
     },
     get: (p) => API.call("GET", p),
-    post: (p, b) => API.call("POST", p, b || {}),
+    post: (p, b) => API.call("POST", p, { ...(b || {}), user: S.users[S.role],
+      ...(p === "/api/config" || p === "/api/faults" ? { admin_password: S.adminPw } : {}) }),
   };
 
   /* ------------------------------------------------------------ 页面作用域（离开页面时清理定时器） */
@@ -156,9 +161,15 @@
   }
   function renderRole() {
     const html = `<div class="role-switch" data-role="${S.role}"><i class="thumb"></i>
-      <button data-r="initiator" class="${S.role === "initiator" ? "on" : ""}">发起人</button><button data-r="reviewer" class="${S.role === "reviewer" ? "on" : ""}">审核人</button></div>`;
+      <button data-r="initiator" class="${S.role === "initiator" ? "on" : ""}">发起人</button><button data-r="reviewer" class="${S.role === "reviewer" ? "on" : ""}">审核人</button></div>
+      <input class="role-name" value="${esc(S.users[S.role])}" maxlength="20" spellcheck="false" aria-label="姓名" title="姓名：记录在事件日志里；发起人不能审核自己发起的任务">`;
     $$(".role-host, .om-role").forEach((h) => {
       h.innerHTML = html;
+      h.querySelector(".role-name").addEventListener("change", (e) => {
+        S.users[S.role] = e.target.value.trim() || S.users[S.role];
+        try { localStorage.setItem("me-user-" + S.role, S.users[S.role]); } catch (err) { /* ignore */ }
+        renderRole();
+      });
       const sw = h.querySelector(".role-switch");
       const place = () => {
         const on = sw.querySelector("button.on");
@@ -283,6 +294,30 @@
     return wrap;
   }
 
+  // 必填但发起人可确认“没有这份材料”（配置 waivable）：勾选后不上传也可继续，程序记录确认人
+  function waiveToggle(f, values, onChange) {
+    const el = document.createElement("label");
+    el.className = "toggle";
+    el.style.margin = "-6px 0 22px";
+    el.innerHTML = `<input type="checkbox"><span class="sw"></span><span>${esc(f.waivable)}</span>`;
+    el.querySelector("input").addEventListener("change", (e) => {
+      if (e.target.checked) values["waive_" + f.key] = "1"; else delete values["waive_" + f.key];
+      if (onChange) onChange();
+    });
+    return el;
+  }
+  // 保存配置、开关全局故障需要管理员口令（.env 中的 MINI_ADMIN_PASSWORD），由后端校验
+  function adminBar(what) {
+    return `<div class="card admin-bar" style="margin-bottom:18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <span class="card-title" style="margin:0"><span class="dot" style="background:var(--amber)"></span>管理员</span>
+      ${S.meta.admin_configured === false ? `<span class="muted" style="font-size:13px">未设置管理员口令：在 .env 中添加 MINI_ADMIN_PASSWORD 后重启服务，否则${esc(what)}不可用。</span>` :
+      `<div class="input-line" style="flex:1;min-width:200px;max-width:320px"><input type="password" class="admin-pw" placeholder="管理员口令" autocomplete="off" value="${esc(S.adminPw)}"></div>
+      <span class="faint" style="font-size:12px">${esc(what)}需要管理员口令；其他人可查看。</span>`}</div>`;
+  }
+  function bindAdminBar(root) {
+    const pw = root.querySelector(".admin-pw");
+    if (pw) pw.addEventListener("input", () => { S.adminPw = pw.value; });
+  }
   function busy(btn, on) { btn.classList.toggle("loading", on); btn.disabled = on; }
   function centerOf(el) { const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }
   async function act(btn, fn, okMsg) {
@@ -506,7 +541,11 @@
     const ticket = $("#ticket", scope.root);
     let useSample = false;
     emp.form.forEach((f) => {
-      if (f.type === "file") { form.appendChild(dropZone(f, store, renderTicket)); return; }
+      if (f.type === "file") {
+        form.appendChild(dropZone(f, store, renderTicket));
+        if (f.waivable) form.appendChild(waiveToggle(f, values, renderTicket));
+        return;
+      }
       const box = document.createElement("div");
       box.className = "field";
       if (f.type === "enum") {
@@ -565,8 +604,9 @@
 
     function renderTicket() {
       const w = isoWeek(values.period);
-      const fileTxt = (k) => (store[k] && store[k].length ? store[k].map((f) => f.name).join("、") : useSample && (k === "sales_file" || k === "minutes_file") ? "官方样例" : "未上传");
-      const has = (k) => (store[k] && store[k].length) || (useSample && (k === "sales_file" || k === "minutes_file"));
+      const waived = (k) => values["waive_" + k] === "1" && !(store[k] && store[k].length);
+      const fileTxt = (k) => (store[k] && store[k].length ? store[k].map((f) => f.name).join("、") : waived(k) ? "已确认没有" : useSample && (k === "sales_file" || k === "minutes_file") ? "官方样例" : "未上传");
+      const has = (k) => (store[k] && store[k].length) || waived(k) || (useSample && (k === "sales_file" || k === "minutes_file"));
       const req = emp.form.filter((f) => f.type === "file" && f.required);
       ticket.innerHTML = `<div class="t-eyebrow"><span>任务单 · ${esc(emp.name)}</span><span>${S.role === "reviewer" ? "审核人" : "发起人"}</span></div>
         <div class="t-period">${w && !w.bad ? "W" + w.w : "W—"}</div>
@@ -707,10 +747,12 @@
         const store = {};
         card.innerHTML = `<div class="card-title"><span class="dot" style="background:var(--amber)"></span>补充材料</div><p class="muted" style="margin-top:0;font-size:14px">销售明细可只上传缺少的部分（如上周数据），会与已上传的数据自动合并。补充后从暂停处继续，不需要重新发起。</p><div class="grid g2" id="supz"></div>
           <button class="btn btn-primary" id="supbtn">${roll("提交补充材料")}<span class="arrow">${I.arrow}</span></button>`;
+        const fields = {};
         emp.form.filter((f) => f.type === "file").forEach((f) => $("#supz", card).appendChild(dropZone(f, store)));
+        emp.form.filter((f) => f.waivable).forEach((f) => $("#supz", card).after(waiveToggle(f, fields)));
         $("#supbtn", card).addEventListener("click", async (e) => {
           const btn = e.currentTarget;
-          const ok = await act(btn, async () => API.post(`/api/tasks/${id}/supplement`, { files: await packFiles(store), role: S.role }), "已提交补充材料，重新准入");
+          const ok = await act(btn, async () => API.post(`/api/tasks/${id}/supplement`, { files: await packFiles(store), fields, role: S.role }), "已提交补充材料，重新准入");
           if (ok) refresh();
         });
         box.appendChild(card);
@@ -1107,7 +1149,7 @@
     const opts = (S.meta.faults || []).filter((f) => f.scope !== "task");
     let cur = (S.faults = await API.get("/api/faults"));
     const isOn = (f) => cur.some((x) => x.tool === f.tool && x.mode === f.mode);
-    scope.root.innerHTML = pageHead("06", `故障<span class="hl">注入</span>`, "对之后的所有工具调用生效，用于现场演示“工具故障的处理过程”。也可以在发起任务时只对单个任务注入。") + `
+    scope.root.innerHTML = pageHead("06", `故障<span class="hl">注入</span>`, "对之后的所有工具调用生效，用于现场演示“工具故障的处理过程”。也可以在发起任务时只对单个任务注入。") + adminBar("开关全局故障") + `
       <div class="grid g2">${opts.map((f, i) => `<div class="card spot fault-card ${isOn(f) ? "on" : ""}" data-reveal style="--d:${i * 80}ms" data-id="${esc(f.id)}">
         <div class="fc-top"><div><div class="tool">${esc(f.tool)} · ${esc(f.mode)}</div><h3>${esc(f.label)}</h3></div>
         <label class="toggle danger"><input type="checkbox" ${isOn(f) ? "checked" : ""}><span class="sw"></span></label></div>
@@ -1129,6 +1171,7 @@
             <button class="btn btn-primary" id="fgo" data-magnetic>${roll("发起演示任务")}<span class="arrow">${I.arrow}</span></button></div>
         </div>
       </section>`;
+    bindAdminBar(scope.root);
     const sync = () => { FX.mood(cur.length ? "danger" : "idle"); S.faults = cur; renderHazard(); };
     sync();
     $$(".fault-card", scope.root).forEach((card) => {
@@ -1224,9 +1267,10 @@
     const emp = S.meta.employee;
     const tabsDef = [["yaml", "employee.yaml · 结构"], ["skill", "SKILL.md · 做法"], ["flow", "状态流转表"], ["tools", "工具与上限"]];
     scope.root.innerHTML = pageHead("07", `员工<span class="hl">配置</span>`, "员工的岗位职责、工作步骤、开放工具、质检规则和上限都写在配置文件里。业务人员改这里即可调整员工做法，保存前自动校验，有错误不会写入。") +
-      (S.meta.config_error ? `<div class="alert danger" style="margin-bottom:18px"><span class="a-ico">!</span><h4>员工配置有误，其他页面暂不可用</h4><p>${esc(S.meta.config_error.join("\n"))}</p></div>` : "") + `
+      adminBar("保存配置") + (S.meta.config_error ? `<div class="alert danger" style="margin-bottom:18px"><span class="a-ico">!</span><h4>员工配置有误，其他页面暂不可用</h4><p>${esc(S.meta.config_error.join("\n"))}</p></div>` : "") + `
       <div class="tabs" id="ctabs">${tabsDef.map(([k, l], i) => `<button data-t="${k}" class="${i ? "" : "on"}">${l}</button>`).join("")}<i class="ind"></i></div>
       <div id="cbody"></div>`;
+    bindAdminBar(scope.root);
     const tabs = $("#ctabs", scope.root), body = $("#cbody", scope.root);
     const texts = { yaml: cfg["employee.yaml"], skill: cfg["SKILL.md"] };
     const placeInd = () => { const on = tabs.querySelector("button.on"), ind = tabs.querySelector(".ind"); if (on) { ind.style.left = on.offsetLeft + "px"; ind.style.width = on.offsetWidth + "px"; } };
@@ -1242,15 +1286,16 @@
           <button class="btn btn-ghost btn-sm" id="cval">${roll("只校验")}</button>
           <button class="btn btn-primary btn-sm" id="csave">${roll("校验并保存")}</button>
           <button class="btn btn-sm btn-ghost" id="creset">${roll("还原")}</button>
+          <div class="input-line" style="flex:1;min-width:180px"><input type="text" id="cnote" placeholder="修改说明（记入修改记录）"></div>
           <span class="faint" style="font-size:12px"><span class="kbd">Ctrl</span> + <span class="kbd">S</span> 保存 · 保存后对新执行的步骤生效</span></div><ul class="errs" id="cerr"></ul>`;
         ed = editor($("#edhost", body), texts[k], k === "yaml" ? "yaml" : "md");
         edKind = k;
         const run = async (save, btn) => {
-          const res = await act(btn, () => API.post("/api/config", { name, text: ed.value, save }));
+          const res = await act(btn, () => API.post("/api/config", { name, text: ed.value, save, note: $("#cnote", body).value }));
           if (!res) return;
           const list = $("#cerr", body);
           const items = res.errors.map((x) => ["e", x]).concat(res.warnings.map((x) => ["w", x]));
-          if (!res.errors.length) items.unshift(["ok", save ? `已保存 ${name}，校验通过` : "校验通过，可以保存"]);
+          if (!res.errors.length) items.unshift(["ok", save ? `已保存 ${name}，校验通过${res.seq ? `（修改记录 #${res.seq}）` : ""}` : "校验通过，可以保存"]);
           list.innerHTML = items.map(([c, x], i) => `<li class="${c}" style="--i:${i}">${c === "e" ? "✗ " : c === "w" ? "! " : "✓ "}${esc(x)}</li>`).join("");
           if (res.errors.length) { FX.toast(`配置有 ${res.errors.length} 处错误，未保存`, "err"); FX.glitch(); }
           else if (save) { FX.toast(`已保存 ${name}`, "ok"); texts[k] = ed.value; cfg[name] = ed.value; const [x, y] = centerOf(btn); FX.burst(x, y, { n: 70, power: 10 }); }

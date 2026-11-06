@@ -161,6 +161,9 @@ html.has-cursor .cursor { display: block; }
 .role-switch button.on { color: #0a0c10; font-weight: 700; }
 .role-switch .thumb { position: absolute; top: 4px; bottom: 4px; left: 4px; border-radius: 999px; background: var(--aqua); transition: transform .5s var(--spring), width .5s var(--spring), background .4s; }
 .role-switch[data-role="reviewer"] .thumb { background: var(--violet); }
+.role-host, .om-role { display: flex; align-items: center; gap: 8px; }
+.role-name { width: 72px; padding: 7px 12px; font-size: 13px; color: var(--ink); background: rgba(255,255,255,.03); border: 1px solid var(--line-2); border-radius: 999px; outline: none; }
+.role-name:focus { border-color: var(--aqua); }
 .menu-btn { display: none; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line-2); position: relative; }
 .menu-btn i { position: absolute; left: 13px; right: 13px; height: 1.5px; background: var(--ink); transition: transform .4s var(--ease), top .4s var(--ease); }
 .menu-btn i:nth-child(1) { top: 18px; } .menu-btn i:nth-child(2) { top: 25px; }

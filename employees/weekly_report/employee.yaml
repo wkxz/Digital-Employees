@@ -14,9 +14,11 @@ model:
 form:
   - {key: period, label: 统计周期, type: iso_week, required: true, help: "如 2026-W44、2026年第44周 或 2026-10-26~2026-11-01"}
   - {key: sales_file, label: 销售明细, type: file, ext: [xlsx, csv], required: true, multiple: true}  # 可分多份上传，补充材料时追加
-  # 周会纪要选填：《周报格式要求》规定纪要没提到的原因写“原因待核实”，没有纪要时照常出报告，全部原因标注待核实
-  - {key: minutes_file, label: 周会纪要, type: file, ext: [docx, md], required: false,
-     help: "建议上传：异常原因优先引用纪要；未上传时照常生成，原因均标注“待核实”"}
+  # 周会纪要默认必填：缺了暂停，提示补充。waivable：发起人可明确确认“本周没有纪要”后继续（表单 / 补充材料时勾选，
+  # 即表单值 waive_minutes_file=1），此时异常原因全部标注“原因待核实”，数据质量说明写明，事件日志记录谁确认的
+  - {key: minutes_file, label: 周会纪要, type: file, ext: [docx, md], required: true,
+     waivable: "本周没有周会纪要，继续生成（异常原因均标注“原因待核实”）",
+     help: "异常原因优先引用纪要。确实没有纪要时可勾选“本周没有周会纪要”继续生成"}
   - {key: master_file, label: 主数据, type: file, ext: [xlsx], required: false,
      help: "可选：门店信息、商品信息、销售目标工作表（可只含其中几张）。门店新开或目标调整时上传，优先于系统自带的主数据"}
   - {key: focus_region, label: 重点关注区域, type: enum, options: [华东, 华南, 华北, 西南], required: false,
