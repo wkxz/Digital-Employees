@@ -225,7 +225,28 @@ def load_sales_many(paths: list[Path], aliases: dict[str, list[str]], required: 
             info["date_range"] = [dates.min().date().isoformat(), dates.max().date().isoformat()]
             iso = dates.dt.isocalendar()
             info["weeks"] = sorted({f"{y}-W{w:02d}" for y, w in zip(iso["year"], iso["week"])})
+        info["unmatched_rows"] = unmatched_rows(df, (data_cfg or {}).get("lookups", []), info["lookups"]["unmatched"])
     return df.drop(columns="_src"), info
+
+
+def unmatched_rows(df: pd.DataFrame, lookups: list[dict[str, Any]], unmatched: dict[str, list[str]]
+                   ) -> dict[str, dict[str, dict[str, Any]]]:
+    """主数据里找不到的编码（如新开门店、新上市商品）各自涉及哪几周、多少行、多少销售额。
+    这些行关联不到区域 / 品类，清洗时会被当作空值剔除，不提示就会悄悄少算。"""
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    for lk in lookups:
+        codes = unmatched.get(lk["sheet"])
+        if not codes or lk["key"] not in df.columns:
+            continue
+        sub = df[df[lk["key"]].isin(codes)]
+        iso = pd.to_datetime(sub["日期"], errors="coerce").dt.isocalendar()
+        sub = sub.assign(_wk=[f"{y}-W{w:02d}" if pd.notna(w) else "" for y, w in zip(iso["year"], iso["week"])])
+        out[lk["sheet"]] = {
+            str(code): {"rows": int(len(g)), "weeks": sorted(w for w in g["_wk"].unique() if w),
+                        "sales": round(float(pd.to_numeric(g["销售额"], errors="coerce").sum()), 2)
+                        if "销售额" in g.columns else None}
+            for code, g in sub.groupby(lk["key"])}
+    return out
 
 
 def _row_desc(r: pd.Series) -> str:

@@ -260,6 +260,27 @@ class Orchestrator:
                     "请上传包含该周的销售数据，或改选数据范围内的周期")
         return None
 
+    UPLOAD_MASTER = "请在“主数据”一栏上传包含最新门店信息、商品信息、销售目标工作表的 xlsx（或上传带这些工作表的销售明细 xlsx）后继续"
+
+    @classmethod
+    def _master_gap(cls, week: Any, info: dict[str, Any]) -> str | None:
+        """本周或上周有销售、但主数据里找不到的门店 / 商品编码（新开门店、新上市商品），以及本周没有销售目标。
+        前者关联不到区域 / 品类，会被当作空值剔除、悄悄少算；后者算不出目标达成率。都暂停，请发起人补主数据。"""
+        weeks = {week.key, week.prev.key}
+        gaps = []
+        for sheet, codes in (info.get("unmatched_rows") or {}).items():
+            hit = {c: v for c, v in codes.items() if weeks & set(v["weeks"])}
+            if hit:
+                desc = "、".join(f"{c}（{v['rows']} 行" + (f"、实收 {v['sales']:,.0f} 元" if v.get("sales") is not None else "")
+                                + "）" for c, v in hit.items())
+                gaps.append(f"销售明细中的编码 {desc}在{sheet}中找不到")
+        if gaps:
+            gaps = ["；".join(gaps) + "，这部分销售额无法归入区域或品类，直接计算会少算"]
+        tw = info.get("target_weeks")
+        if tw and f"W{week.week:02d}" not in tw and f"W{week.week}" not in tw:
+            gaps.append(f"销售目标中没有第 {week.week} 周的目标（现有 {tw[0]}～{tw[-1]}），无法计算目标达成率")
+        return "；".join(gaps) + "。" + cls.UPLOAD_MASTER if gaps else None
+
     def _on_admission(self, task: dict, resumed: bool) -> None:
         tid = task["id"]
         emp = self._emp(task)
@@ -329,6 +350,9 @@ class Orchestrator:
                 cover = self._coverage_problem(week, info)
                 if cover:
                     problems.append(cover)
+                master_gap = self._master_gap(week, info)
+                if master_gap:
+                    problems.append(master_gap)
                 if adm.get("require_previous_week") and info.get("has_current_week") and not info.get("has_prev_week"):
                     problems.append(f"缺少上一周（{week.prev.key}，{week.prev.start}~{week.prev.end}）的销售数据，无法计算环比。"
                                     "请补充上传（可只上传上周数据，系统会与已上传的数据自动合并）")
