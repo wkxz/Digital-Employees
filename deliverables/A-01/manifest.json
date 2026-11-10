@@ -1,20 +1,20 @@
 {
-  "task_id": "T1101-224915-f582",
-  "version": 1,
-  "artifact": "v1",
+  "task_id": "T1110-122528-ad63",
+  "version": 2,
+  "artifact": "v2",
   "files": [
     {
       "name": "经营周报_2026W44.docx",
-      "sha256": "77bae52335da3f5bb113bf5a15bdc20e7c83ecd7b4233c9a81bf1af8322a5a83"
+      "sha256": "a1eaddd4a05495147c30f791818fa9540e24b7eb1b4f8cb125e4ef52bb4f020d"
     },
     {
       "name": "qc_report.json",
-      "sha256": "664ed2e16f49c83f4d69a24827b1e8432e9cd0b9a40eb8d9dc5c3e6591192cbe"
+      "sha256": "bb5fc22a9f4b13c28dd37a9de1b93a1be451c1b02c9af7cabc832755d72d78e3"
     },
     {
       "name": "质检记录.md",
-      "sha256": "9b88996240743e974aa52a6d887986c7938de5e4defafb7ac49e4f20234e8587"
+      "sha256": "aa139dda9df4c002e017c13c48b3380d7124bddfd8e5717440730d97dcbae672"
     }
   ],
-  "delivered_at": "2026-11-01 22:49:21"
+  "delivered_at": "2026-11-10 12:26:19"
 }

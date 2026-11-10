@@ -3,7 +3,7 @@ RUN = $(UV) run
 # 模拟数据为 2026 年第 44 周，演示时把“今天”固定在该周之后
 export MINI_TODAY ?= 2026-11-03
 
-.PHONY: install data test cases samples ui web demo transitions check-model check-config clean
+.PHONY: install data test cases samples report ui web demo transitions check-model check-config clean
 
 install:            ## 安装依赖（需要 uv：https://docs.astral.sh/uv/）
 	$(UV) sync
@@ -19,6 +19,10 @@ cases:              ## 运行自测用例并生成报告 reports/case_report.md
 
 samples:            ## 运行 5 条官方公开样例，交付文件与质检记录导出到 deliverables/
 	$(RUN) python scripts/export_samples.py
+
+report:             ## 技术报告导出 Word / PDF（docs/，需要 pandoc；有 Word 时检查不超过 8 页）
+	$(RUN) python scripts/draw_architecture.py
+	$(RUN) python scripts/export_report.py
 
 ui:                 ## 启动 Web 界面 http://localhost:8501
 	$(RUN) streamlit run app/streamlit_app.py

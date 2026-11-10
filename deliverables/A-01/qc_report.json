@@ -4,8 +4,8 @@
       "round_no": 1,
       "version": 1,
       "artifact": "v1",
-      "artifact_sha256": "77bae52335da3f5bb113bf5a15bdc20e7c83ecd7b4233c9a81bf1af8322a5a83",
-      "ts": "2026-11-01 22:49:21",
+      "artifact_sha256": "4773eb63b78bf04f883db239cc59ad12f2316d6c3d0f592c4dd82e20aa336bc3",
+      "ts": "2026-11-10 12:25:59",
       "passed": true,
       "results": [
         {
@@ -87,6 +87,105 @@
           "severity": "blocking",
           "details": [],
           "fix_hint": ""
+        }
+      ],
+      "fix_actions": []
+    },
+    {
+      "round_no": 2,
+      "version": 2,
+      "artifact": "v2",
+      "artifact_sha256": "a1eaddd4a05495147c30f791818fa9540e24b7eb1b4f8cb125e4ef52bb4f020d",
+      "ts": "2026-11-10 12:26:18",
+      "passed": true,
+      "results": [
+        {
+          "rule": "structure",
+          "name": "结构完整",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "补全缺失章节，每章至少一段"
+        },
+        {
+          "rule": "data_consistency",
+          "name": "数据一致性",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "数字一律用占位符引用；涨跌描述与环比正负保持一致"
+        },
+        {
+          "rule": "cause_evidence",
+          "name": "异常归因有据",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "每条异常的原因须引用纪要条目编号，纪要未提及的写“待核实”"
+        },
+        {
+          "rule": "threshold_coverage",
+          "name": "波动对象逐一列出",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "逐一列出环比超过阈值的区域和门店并说明原因"
+        },
+        {
+          "rule": "minutes_vs_data",
+          "name": "纪要说法与数据核对",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "在异常条目下补充数据核对说明"
+        },
+        {
+          "rule": "keyword_required",
+          "name": "摘要讲清核心指标",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "在summary中补充：实收、环比、毛利率、目标达成率"
+        },
+        {
+          "rule": "regex_forbidden",
+          "name": "不写数据不支持的指标",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "改写不允许的表述"
+        },
+        {
+          "rule": "sensitive_words",
+          "name": "敏感信息",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "删除或脱敏敏感信息"
+        },
+        {
+          "rule": "length",
+          "name": "字数",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "压缩摘要条数与字数"
+        },
+        {
+          "rule": "page_limit",
+          "name": "篇幅",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": ""
+        },
+        {
+          "rule": "feedback_addressed",
+          "name": "审核意见已采纳",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "逐条落实审核意见"
         }
       ],
       "fix_actions": []

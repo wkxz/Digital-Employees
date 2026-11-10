@@ -4,8 +4,118 @@
       "round_no": 1,
       "version": 1,
       "artifact": "v1",
-      "artifact_sha256": "384e3185294cc976d1f47c5f5c1bcf2066918b53d2d966ae3b47848e72fcecf7",
-      "ts": "2026-11-01 22:49:26",
+      "artifact_sha256": "3b94b9fe768f47c7ce157bce97dd74da801c85d4200f1252515af63fc4f62f8e",
+      "ts": "2026-11-10 12:26:45",
+      "passed": false,
+      "results": [
+        {
+          "rule": "structure",
+          "name": "结构完整",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "补全缺失章节，每章至少一段"
+        },
+        {
+          "rule": "data_consistency",
+          "name": "数据一致性",
+          "passed": false,
+          "severity": "blocking",
+          "details": [
+            {
+              "type": "sign_after_word",
+              "section": "anomalies",
+              "index": 0,
+              "field": "phenomenon",
+              "text": "增加 {{anomaly.A1.impact}}",
+              "key": "anomaly.A1.impact",
+              "msg": "“增加”后的 {{anomaly.A1.impact}} 会带正负号，应写 {{anomaly.A1.impact|abs}}"
+            },
+            {
+              "type": "sign_after_word",
+              "section": "anomalies",
+              "index": 1,
+              "field": "phenomenon",
+              "text": "增加 {{anomaly.A2.impact}}",
+              "key": "anomaly.A2.impact",
+              "msg": "“增加”后的 {{anomaly.A2.impact}} 会带正负号，应写 {{anomaly.A2.impact|abs}}"
+            }
+          ],
+          "fix_hint": "数字一律用占位符引用；涨跌描述与环比正负保持一致"
+        },
+        {
+          "rule": "cause_evidence",
+          "name": "异常归因有据",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "每条异常的原因须引用纪要条目编号，纪要未提及的写“待核实”"
+        },
+        {
+          "rule": "threshold_coverage",
+          "name": "波动对象逐一列出",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "逐一列出环比超过阈值的区域和门店并说明原因"
+        },
+        {
+          "rule": "minutes_vs_data",
+          "name": "纪要说法与数据核对",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "在异常条目下补充数据核对说明"
+        },
+        {
+          "rule": "keyword_required",
+          "name": "摘要讲清核心指标",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "在summary中补充：实收、环比、毛利率、目标达成率"
+        },
+        {
+          "rule": "regex_forbidden",
+          "name": "不写数据不支持的指标",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "改写不允许的表述"
+        },
+        {
+          "rule": "sensitive_words",
+          "name": "敏感信息",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "删除或脱敏敏感信息"
+        },
+        {
+          "rule": "length",
+          "name": "字数",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "压缩摘要条数与字数"
+        },
+        {
+          "rule": "page_limit",
+          "name": "篇幅",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": ""
+        }
+      ],
+      "fix_actions": []
+    },
+    {
+      "round_no": 2,
+      "version": 1,
+      "artifact": "v1f1",
+      "artifact_sha256": "f3b63d45ac9cff33e306d054fd99289fd34ba45ad5ea6f1bdbb41da3058fc5d4",
+      "ts": "2026-11-10 12:26:46",
       "passed": true,
       "results": [
         {
@@ -89,7 +199,10 @@
           "fix_hint": ""
         }
       ],
-      "fix_actions": []
+      "fix_actions": [
+        "“增加 {{anomaly.A1.impact}}”改为不带正负号的写法",
+        "“增加 {{anomaly.A2.impact}}”改为不带正负号的写法"
+      ]
     }
   ]
 }

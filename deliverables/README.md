@@ -1,6 +1,6 @@
 # 公开样例用例运行结果
 
-模型：mock　由 `scripts/export_samples.py` 生成，每个目录含交付的 Word 周报、质检记录和运行记录。
+模型：openai_compatible:deepseek-flash　合计约 94,944 token　由 `scripts/export_samples.py` 生成，每个目录含交付的 Word 周报、质检记录和运行记录。
 
 | 用例 | 内容 | 统计周期 | 结果 | 文件 |
 |---|---|---|---|---|

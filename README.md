@@ -11,11 +11,16 @@
 
 ```bash
 make install        # 安装依赖（需要 uv）
-make test           # 单元测试 + 41 条用例 + 现场变更预演 + 真实模型调用路径测试（共 157 项，全部离线，约 5 分钟）
+make test           # 单元测试 + 41 条用例 + 现场变更预演 + 真实模型调用路径测试（共 159 项，全部离线，约 5 分钟）
 make demo           # 命令行跑一条正常任务，停在“待审核”
 make ui             # Web 界面 http://localhost:8501
 make web            # 新版控制台 http://127.0.0.1:8600（演示推荐）
+make samples        # 公开样例 A-01～A-05 → deliverables/（用 .env 中的模型）
+make report         # 技术报告导出 docs/技术报告.docx / .pdf（需要 pandoc）
 ```
+
+在线体验：https://mini.wkxyz.xyz 　提交材料：技术报告 `docs/技术报告.pdf`、公开样例运行结果 `deliverables/`、
+自测用例报告 `reports/case_report.md`（Mock）与 `reports/case_report_real.md`（真实模型）、真实模型验证 `reports/real_model_report.md`。
 
 ### 新版控制台
 

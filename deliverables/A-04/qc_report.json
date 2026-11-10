@@ -4,8 +4,106 @@
       "round_no": 1,
       "version": 1,
       "artifact": "v1",
-      "artifact_sha256": "aabd1547aabd697efa02ef3ab0daf4733ef87d077ebcd61459313d0506dee6c6",
-      "ts": "2026-11-01 22:49:36",
+      "artifact_sha256": "094d264f408db65f5e7e97e614bac2d5b92d46ca2e820ddc2867a6e55cdbea4a",
+      "ts": "2026-11-10 12:27:45",
+      "passed": false,
+      "results": [
+        {
+          "rule": "structure",
+          "name": "结构完整",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "补全缺失章节，每章至少一段"
+        },
+        {
+          "rule": "data_consistency",
+          "name": "数据一致性",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "数字一律用占位符引用；涨跌描述与环比正负保持一致"
+        },
+        {
+          "rule": "cause_evidence",
+          "name": "异常归因有据",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "每条异常的原因须引用纪要条目编号，纪要未提及的写“待核实”"
+        },
+        {
+          "rule": "threshold_coverage",
+          "name": "波动对象逐一列出",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "逐一列出环比超过阈值的区域和门店并说明原因"
+        },
+        {
+          "rule": "minutes_vs_data",
+          "name": "纪要说法与数据核对",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "在异常条目下补充数据核对说明"
+        },
+        {
+          "rule": "keyword_required",
+          "name": "摘要讲清核心指标",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "在summary中补充：实收、环比、毛利率、目标达成率"
+        },
+        {
+          "rule": "regex_forbidden",
+          "name": "不写数据不支持的指标",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "改写不允许的表述"
+        },
+        {
+          "rule": "sensitive_words",
+          "name": "敏感信息",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "删除或脱敏敏感信息"
+        },
+        {
+          "rule": "length",
+          "name": "字数",
+          "passed": true,
+          "severity": "blocking",
+          "details": [],
+          "fix_hint": "压缩摘要条数与字数"
+        },
+        {
+          "rule": "page_limit",
+          "name": "篇幅",
+          "passed": false,
+          "severity": "blocking",
+          "details": [
+            {
+              "type": "pages",
+              "chars": 1832,
+              "target_chars": 1150,
+              "msg": "正文约 4 页，超过 3 页；模型撰写的文字约 1832 字，请压缩到 1150 字以内"
+            }
+          ],
+          "fix_hint": "表格里已有的数字不要在文字中逐项复述，每条只保留结论和原因；异常条目中的带动门店名字全部保留（可只写店名和环比），主要压缩原因和建议"
+        }
+      ],
+      "fix_actions": []
+    },
+    {
+      "round_no": 2,
+      "version": 1,
+      "artifact": "v1f1",
+      "artifact_sha256": "df4eee1306dbd7f39f848cfda1dd9bb3d34e738704f9c05c27059010f80753cc",
+      "ts": "2026-11-10 12:29:22",
       "passed": true,
       "results": [
         {
@@ -89,7 +187,9 @@
           "fix_hint": ""
         }
       ],
-      "fix_actions": []
+      "fix_actions": [
+        "模型按质检意见改写：篇幅"
+      ]
     }
   ]
 }
