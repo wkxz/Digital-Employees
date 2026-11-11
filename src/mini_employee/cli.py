@@ -94,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("config-history", help="员工配置变更记录（谁、何时、改了哪个文件）")
     p.add_argument("--employee", default="weekly_report")
     p.add_argument("--diff", type=int, metavar="序号", help="显示某次变更的差异")
+    p = sub.add_parser("memory", help="跨周记忆：各周已交付周报记下的下周关注事项与异常")
+    p.add_argument("--employee", default="weekly_report")
     sub.add_parser("check-model", help="检查模型配置：连通性、工具调用、JSON 输出、响应时间")
     p = sub.add_parser("check-config", help="检查员工配置（employee.yaml / SKILL.md），现场改完先跑一次")
     p.add_argument("--employee", default="weekly_report")
@@ -174,6 +176,17 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{e['seq']:>4} {e['ts'][11:23]} {e['type']:<20} {e['step_id'] or '':<9} {payload}")
         elif a.cmd == "config-history":
             config_history(o, a.employee, a.diff)
+        elif a.cmd == "memory":
+            from .memory import history
+            rows = history(o.memory, a.employee)
+            if not rows:
+                print("还没有已交付的周报")
+            for v in rows:
+                print(f"{v['period']}  {v['period_label']}  （任务 {v['task_id']}）")
+                for f in v["follow_ups"]:
+                    print(f"  · 下周关注：{f}")
+                for x in v["anomalies"]:
+                    print(f"  · 异常：{x['label']} —— {x['brief']}")
         elif a.cmd == "check-model":
             from .llm.check import check_model
             return check_model()

@@ -9,13 +9,15 @@
 
 任务编排基于 **LangGraph**：任务推进是一张 StateGraph（等人处理的环节用 `interrupt()` 暂停、人工操作后用 `Command(resume)` 唤醒，检查点存 SQLite），执行 / 返工节点内部是一张步骤图：7 个工作步骤各是一个节点，按 `employee.yaml` 中的 `after` 连线，没有依赖关系的步骤并行执行（读取销售明细与读取周会纪要、生成图表与异常原因分析），有步骤失败时由汇合节点统一暂停；每个模型步骤又是一张“模型 ⇄ 工具 ⇄ 校验”子图。图的边由状态流转表推出，路由是纯程序函数；SQLite 任务表仍是唯一的状态来源，所有状态变更都经过 `Store.transition()` 的闸门。流程图见 [docs/workflow.md](docs/workflow.md)（`uv run mini graph` 生成）。
 
+跨周长期记忆（LangGraph Store）：周报交付后记下本周的下周关注事项、异常与原因摘要、纪要行动项（`runs/memory.sqlite`，按员工 + 统计周期存放）；下一周撰写时作为 `last_week` 交给模型跟进，任务详情页显示“上周跟进”，`uv run mini memory` 可查看。只记录审核通过的内容。
+
 任务详情页实时显示进度：图以流式方式运行（含子图），正在运行的节点与模型边生成边输出的内容写入 SQLite 的实时进度表，网页经 SSE（`/api/tasks/{id}/stream`）推送给浏览器，状态或事件有变化时页面立即刷新；连接中断时浏览器带 `Last-Event-ID` 自动重连续传，连不上时退回定时刷新。
 
 ## 快速开始
 
 ```bash
 make install        # 安装依赖（需要 uv）
-make test           # 单元测试 + 41 条用例 + 现场变更预演 + 真实模型调用路径测试（共 188 项，全部离线，约 5 分钟）
+make test           # 单元测试 + 41 条用例 + 现场变更预演 + 真实模型调用路径测试（共 192 项，全部离线，约 5 分钟）
 make demo           # 命令行跑一条正常任务，停在“待审核”
 make ui             # Web 界面 http://localhost:8501
 make web            # 新版控制台 http://127.0.0.1:8600（演示推荐）
@@ -101,6 +103,7 @@ employees/weekly_report/       场景 A 经营周报员工（青禾烘焙官方�
 src/mini_employee/
   states.py            状态、流转表、闸门条件
   store.py             SQLite：任务表 + 只追加的事件表；唯一的状态变更入口 transition()
+  memory.py            跨周长期记忆（LangGraph SqliteStore）：交付时记住要点，下一周撰写时取出
   workflow.py          LangGraph 任务编排图（节点 = 状态处理函数，边由流转表推出；等人处理用 interrupt 暂停；SQLite 检查点）与步骤图（按 after 并行）；流式运行时写实时进度
   orchestrator.py      编排器：各状态的处理函数（准入 → 步骤执行 → 质检 → 修正 → 审核 → 交付）与人工操作；断点恢复
   tools/server.py      MCP 工具服务（FastMCP），7 个工具

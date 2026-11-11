@@ -722,6 +722,7 @@
       <div class="card" id="dlivecard" style="margin-top:18px;display:none"><div class="row-between"><div class="card-title"><span class="dot"></span>实时进度 · 模型输出</div><span class="faint" style="font-size:12px" id="dlconn">实时推送</span></div><div class="live-nodes" id="dlnodes"></div><div id="dlmodels"></div></div>
       <div class="card" data-reveal style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot"></span>状态轨迹</div><a class="link-arrow" href="#/events/${esc(id)}">完整回放 ${I.arrow}</a></div><div id="dgraph"></div></div>
       <div class="card" data-reveal style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot"></span>实时事件 · 只追加</div><span class="faint mono" style="font-size:12px" id="dcount"></span></div><div class="feed" id="dfeed"></div></div>
+      <div id="dmem"></div>
       <div id="dkpi"></div>`;
     const orb = FX.orb($("#torb", root), { n: 700, radius: 0.3 });
     scope.on(() => orb.destroy());
@@ -979,7 +980,17 @@
       while (feed.children.length > 80) feed.removeChild(feed.lastChild);
       $("#dcount", root).textContent = `${events.length} 条事件`;
     };
+    let memDone = false;
+    const renderMemory = () => {  // 跨周记忆：上一周已交付周报记下的要点，本周撰写时交给模型跟进
+      const m = t.last_week;
+      if (memDone || !m) return;
+      memDone = true;
+      $("#dmem", root).innerHTML = `<div class="card" style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot" style="background:var(--violet)"></span>上周跟进 · 跨周记忆</div><span class="faint" style="font-size:12px">${esc(m.period_label || m.period)} 已交付周报（任务 <span class="mono">${esc(m.task_id)}</span>），撰写本周周报时交给模型跟进</span></div>
+        <div class="grid g2"><div><div class="faint" style="font-size:12px;margin-bottom:6px">上周列出的下周关注事项</div><ul style="margin:0;padding-left:18px">${(m.follow_ups || []).map((f) => `<li>${esc(f)}</li>`).join("") || "<li class='faint'>无</li>"}</ul></div>
+        <div><div class="faint" style="font-size:12px;margin-bottom:6px">上周的异常与原因</div><ul style="margin:0;padding-left:18px">${(m.anomalies || []).map((a) => `<li><b>${esc(a.label)}</b>：${esc(a.brief)}</li>`).join("") || "<li class='faint'>无</li>"}</ul></div></div></div>`;
+    };
     const renderKpi = () => {
+      renderMemory();
       if (kpiDone || !t.kpis) return;
       kpiDone = true;
       const k = t.kpis, T = k.total || {};

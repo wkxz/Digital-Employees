@@ -30,7 +30,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import jsonschema
 
-from mini_employee import config_admin
+from mini_employee import config_admin, memory
 from mini_employee.config import EMPLOYEES_DIR, ROOT, load_employee, read_employee_files, runs_dir
 from mini_employee.fsutil import read_json
 from mini_employee.orchestrator import Orchestrator
@@ -270,6 +270,8 @@ def api_task(tid: str) -> dict[str, Any]:
     out["feedback_comments"] = fb["comments"] if fb else None
     kp = o.task_dir(tid) / "work" / "kpis.json"
     out["kpis"] = kpi_digest(read_json(kp)) if kp.exists() else None
+    # 跨周记忆：上一周已交付周报记下的下周关注事项与异常（撰写本周周报时交给模型跟进）
+    out["last_week"] = memory.recall(o.memory, t["employee"], read_json(kp).get("prev_period")) if kp.exists() else None
     return out
 
 

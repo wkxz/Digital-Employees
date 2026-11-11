@@ -20,7 +20,9 @@ from .llm import LLMUnavailable, build_llm
 from .llm.agent import MissingInput, StepLimitExceeded, run_agent_step
 from .payloads import (PLACEHOLDER_HELP, FeedbackCheck, check_feedback, action_items, anomaly_inputs, draft_sections, form_fields, output_schema,
                        overview, parse_feedback, placeholder_table)
+from . import memory
 from .periods import parse_week, today
+from .placeholders import resolve
 from .qc.engine import append_record, blocking_failures, now, program_fix, run_rules
 from .qc import review as cause_review
 from .qc.rules import QCContext
@@ -614,6 +616,8 @@ class Orchestrator:
                                "direction": labels.get(it["id"], {}).get("direction", "")}
                               for it in analysis.get("anomalies", [])],
                 "action_items": action_items(read_json(self.task_dir(tid) / "work" / "minutes.json")),
+                # 跨周记忆：上一周已交付周报的下周关注事项与异常，供本周跟进（没有则为 None）
+                "last_week": memory.recall(self.memory, task["employee"], kpis.get("prev_period")),
                 "placeholders": placeholder_table(kpis),
                 "placeholders_help": PLACEHOLDER_HELP,
                 "feedback": todos, "feedback_raw": fb["comments"] if fb else None, "previous": prev,
@@ -923,6 +927,29 @@ class Orchestrator:
         write_json(out / "manifest.json", {"task_id": tid, "version": task["version"], "artifact": task["artifact"]["tag"],
                                            "files": files, "delivered_at": now()})
         self.store.event(tid, "delivered", None, {"dir": str(out.relative_to(d)), "files": files})
+        self._remember(task)
+
+    @property
+    def memory(self) -> Any:
+        """跨周长期记忆（LangGraph Store），与任务库放在同一目录。"""
+        return memory.open_memory(Path(self.store.path).parent / "memory.sqlite")
+
+    def _remember(self, task: dict) -> None:
+        """交付后记住本周要点（下周关注事项、异常与原因摘要、纪要行动项），下一周撰写时跟进。"""
+        d = self.task_dir(task["id"])
+        art = task["artifact"]
+        kpis = read_json(d / "work" / "kpis.json")
+        flat = anomaly_flat(kpis)
+        content = read_json(d / art["content_path"])
+        content = {**content, "anomalies": [{**a, "brief": resolve(a.get("brief") or a.get("cause", ""), flat)[0]}
+                                            for a in content.get("anomalies", [])]}
+        mp = d / "work" / "minutes.json"
+        minutes = read_json(mp) if mp.exists() else []
+        value = memory.digest(kpis["period"], kpis["period_label"], task["id"], read_json(d / art["texts_path"])["sections"],
+                              content, kpis, action_items(minutes if isinstance(minutes, list) else []))
+        memory.remember(self.memory, task["employee"], kpis["period"], value)
+        self.store.event(task["id"], "memory_saved", None, {"period": kpis["period"],
+                                                            "follow_ups": len(value["follow_ups"])})
 
     def supplement(self, tid: str, files: dict[str, str | Path] | None = None, fields: dict[str, Any] | None = None,
                    actor: str = INITIATOR, run: bool = True, user: str | None = None) -> S:
