@@ -22,6 +22,7 @@ from .payloads import (PLACEHOLDER_HELP, FeedbackCheck, check_feedback, action_i
                        overview, parse_feedback, placeholder_table)
 from .periods import parse_week, today
 from .qc.engine import append_record, blocking_failures, now, program_fix, run_rules
+from .qc import review as cause_review
 from .qc.rules import QCContext
 from .render import anomaly_flat
 from .states import AUTO, INITIATOR, REVIEWER, SYSTEM, S, self_review_problem
@@ -649,6 +650,8 @@ class Orchestrator:
         tid = task["id"]
         emp = self._emp(task)
         ctx, specs = self._qc_context(task, emp)
+        if any(c["rule"] == "cause_review" for c in specs):
+            self._review_causes(task, emp, ctx)
         results = run_rules(ctx, specs)
         fails = blocking_failures(results)
         qc_dir = self.task_dir(tid) / "qc"
@@ -684,6 +687,25 @@ class Orchestrator:
                                                "请人工修改后重新质检，或直接重试。",
                                   resume_to=S.QC.value)
 
+    def _review_causes(self, task: dict, emp: Employee, ctx: QCContext) -> None:
+        """复核员：另一个模型逐条核对原因与所引纪要是否相符，结论写入 ctx 交给质检规则 cause_review。
+        结论按条目缓存；复核员不可用时不阻塞任务，只在检验记录里说明。"""
+        tid = task["id"]
+        items = cause_review.review_items(ctx.content, ctx.minutes, ctx.kpis)
+
+        def run(todo: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+            llm = build_llm(emp.raw.get("model", {}), load_faults(task["meta"].get("faults")), role="reviewer")
+            out = run_agent_step(llm, self._gateway(task, emp), self._emit(tid), step_id="verify", purpose="verify",
+                                 system=cause_review.SYSTEM, payload={"items": todo}, tools=[],
+                                 output_schema=cause_review.SCHEMA, max_turns=3,
+                                 max_seconds=emp.limits["max_step_seconds"])
+            return out["verdicts"], llm.name
+
+        try:
+            ctx.reviews = cause_review.review_causes(items, self.task_dir(tid) / "work" / "cause_review", run)
+        except (StepLimitExceeded, LLMUnavailable, ToolFailure, MissingInput) as e:
+            ctx.review_note = f"复核员未能完成复核（{e}），本轮未复核，不影响其他质检项"
+
     def _must_keep(self, specs: list[dict[str, Any]], task: dict) -> list[str]:
         """修正时必须同时满足的其他质检要求（来自本任务的质检配置），避免修一处、坏一处
         （如压缩篇幅时删掉摘要里的“目标达成率”）。"""
@@ -697,6 +719,8 @@ class Orchestrator:
                 out.append(f"不得出现：{'、'.join(p.get('patterns', []))}")
             elif r == "cause_evidence":
                 out.append("每条异常都要有原因；有纪要依据的保留纪要引用，没有的写“原因待核实”")
+            elif r == "cause_review" and c.get("severity", "blocking") == "blocking":
+                out.append("复核员认为依据不足的原因：改引真正支持它的纪要条目，或改写为“原因待核实”")
             elif r == "threshold_coverage":
                 out.append("环比超过阈值的区域、门店必须仍出现在异常章节，不能为压缩篇幅删掉异常条目")
             elif r == "data_consistency":

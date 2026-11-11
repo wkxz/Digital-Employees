@@ -88,6 +88,8 @@ class MockLLM:
             out = self._draft(payload, results, turn, tool_names)
         elif purpose == "fix":
             out = self._fix(payload)
+        elif purpose == "verify":
+            out = self._verify(payload)
         else:
             out = {}
         if isinstance(out, LLMResponse):
@@ -97,6 +99,19 @@ class MockLLM:
             return LLMResponse("好的，以下是结果：" + json.dumps(out, ensure_ascii=False)[:-5], usage=self._usage(messages))
         return LLMResponse("```json\n" + json.dumps(out, ensure_ascii=False, indent=1) + "\n```",
                            usage=self._usage(messages))
+
+    def _verify(self, p: dict) -> dict:
+        """复核员：原因与所引纪要有共同的词（两个汉字以上）即认为有依据；review_reject 故障下全部判为依据不足。"""
+        out = []
+        for it in p.get("items", []):
+            text = "".join(e["text"] for e in it.get("evidence", []))
+            cause = re.sub(r"[^一-龥]", " ", it.get("cause", ""))
+            grams = {w[i:i + 2] for w in cause.split() for i in range(len(w) - 1)}
+            hit = sorted(g for g in grams if g in text)
+            ok = bool(hit) and "review_reject" not in self.faults
+            out.append({"id": it["id"], "supported": ok,
+                        "reason": f"纪要原文提到“{'、'.join(hit[:3])}”" if ok else "所引纪要没有提到与该原因相关的内容"})
+        return {"verdicts": out}
 
     @staticmethod
     def _usage(messages: list[dict]) -> dict[str, int]:

@@ -275,6 +275,11 @@ def validate(raw: dict[str, Any], skill_sections: dict[str, str]) -> tuple[list[
     prov = (raw.get("model") or {}).get("provider", "mock")
     if prov not in PROVIDERS:
         err(f"model.provider “{prov}” 不支持，可选 {sorted(PROVIDERS)}")
+    rev = (raw.get("model") or {}).get("reviewer")
+    if rev is not None and not isinstance(rev, dict):
+        err("model.reviewer 须为映射，如 {provider: qwen, model: qwen-plus}")
+    elif rev and rev.get("provider", prov) not in PROVIDERS:
+        err(f"model.reviewer.provider “{rev['provider']}” 不支持，可选 {sorted(PROVIDERS)}")
     return errors, warnings
 
 

@@ -15,7 +15,7 @@
 
 ```bash
 make install        # 安装依赖（需要 uv）
-make test           # 单元测试 + 41 条用例 + 现场变更预演 + 真实模型调用路径测试（共 183 项，全部离线，约 5 分钟）
+make test           # 单元测试 + 41 条用例 + 现场变更预演 + 真实模型调用路径测试（共 188 项，全部离线，约 5 分钟）
 make demo           # 命令行跑一条正常任务，停在“待审核”
 make ui             # Web 界面 http://localhost:8501
 make web            # 新版控制台 http://127.0.0.1:8600（演示推荐）
@@ -70,7 +70,13 @@ MINI_MODEL=openai_compatible
 MINI_BASE_URL=https://api.deepseek.com          # 服务商的 OpenAI 兼容地址
 MINI_API_KEY=sk-...
 MINI_MODEL_NAME=deepseek-chat                    # 需支持 Function Calling
+# 可选：复核员换用另一个模型（不填则与上面相同）
+# MINI_REVIEW_MODEL_NAME=qwen-plus
+# MINI_REVIEW_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# MINI_REVIEW_API_KEY=sk-...
 ```
+
+**复核员（多模型协作）**：质检时由另一个模型（可单独配置，见上）逐条核对“异常原因”与所引用的周会纪要原文是否相符——程序规则只能核对引用的编号存在，核对不了引用的那条纪要是否真的支持这个原因。复核结论进入检验记录（规则 `cause_review`，默认 warning，只提示审核人；改为 blocking 则不符时进入自动修正），按条目缓存，内容不变不重复调用；复核员不可用时不阻塞任务。
 
 推荐 **deepseek-flash**：迁移到官方数据后的 33 条真实模型用例全部通过（约 53 万 token），一份周报约 1.3 万～1.4 万 token、模型耗时约 20 秒；
 与 gemini-3.8-flash-high 的对比（速度、token、原因归属是否谨慎）见 `reports/real_model_report.md`。

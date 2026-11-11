@@ -28,6 +28,8 @@ class QCContext:
     todos: list[dict[str, Any]] = field(default_factory=list)
     prev_content: dict[str, Any] | None = None
     pages: int | None = None  # 按交付版式估算的页数
+    reviews: dict[str, dict[str, Any]] | None = None  # 复核员对各条原因的结论（未复核时为 None）
+    review_note: str = ""
 
 
 @dataclass
@@ -199,6 +201,23 @@ def cause_evidence(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
         if i not in known:
             details.append({"type": "unknown_anomaly", "id": i, "msg": f"{i} 不在程序识别的异常列表中"})
     return not details, details, f"每条异常的原因须引用纪要条目编号，纪要未提及的写“{pending_word}”"
+
+
+@rule("cause_review", "复核员核对原因")
+def cause_review(ctx: QCContext, p: dict) -> tuple[bool, list, str]:
+    """另一个模型（复核员）逐条判断原因是否被所引用的纪要原文支持，结论在质检前由编排器取得（见 qc/review.py）。"""
+    hint = "复核员认为依据不足的原因：改引真正支持它的纪要条目，或改写为“原因待核实”"
+    if ctx.reviews is None:
+        return True, [{"type": "note", "msg": ctx.review_note or "未进行复核"}], hint
+    bad = [{"type": "cause_unsupported", "id": i, "msg": f"复核员认为 {i} 的原因依据不足：{v.get('reason', '')}"}
+           for i, v in ctx.reviews.items() if not v.get("supported")]
+    if bad:
+        return False, bad, hint
+    models = sorted({v.get("model", "") for v in ctx.reviews.values()} - {""})
+    msg = "没有引用纪要的原因，无需复核"
+    if ctx.reviews:
+        msg = f"复核员（{'、'.join(models)}）核对了 {len(ctx.reviews)} 条引用纪要的原因，均有依据"
+    return True, [{"type": "note", "msg": msg}], hint
 
 
 # ---------------------------------------------------------------- 纪要说法与数据核对

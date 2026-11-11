@@ -9,6 +9,8 @@ skill: SKILL.md
 model:
   provider: mock            # mock | deepseek | qwen | glm（也可用环境变量 MINI_MODEL 覆盖）
   temperature: 0.2
+  # reviewer: {provider: qwen, model: qwen-plus}   # 复核员（质检 cause_review）可用另一个模型；不配置则与上面相同
+  #                                                # 也可在 .env 中用 MINI_REVIEW_MODEL / MINI_REVIEW_MODEL_NAME 等覆盖
 
 # ---------------------------------------------------------------- 任务发起表单（加字段只改这里）
 form:
@@ -145,6 +147,8 @@ quality_checks:
   - rule: data_consistency
   - rule: cause_evidence
     params: {pending_word: 待核实}
+  - rule: cause_review           # 复核员模型逐条核对原因与所引纪要是否相符；warning 只提示审核人，改为 blocking 则不符时进入自动修正
+    severity: warning
   - rule: threshold_coverage     # 环比超过 ±10% 的区域、门店逐一列出
   - rule: minutes_vs_data        # 纪要口头说法与交易数据不一致时，报告正文必须有“数据核对”说明
   - rule: keyword_required

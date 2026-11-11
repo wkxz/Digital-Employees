@@ -20,6 +20,8 @@ def _purpose(messages: list[dict]) -> str:
         return "analysis"
     if "## 撰写周报" in system:
         return "draft"
+    if "## 原因复核" in system:
+        return "verify"
     return "check"
 
 

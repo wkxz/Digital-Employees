@@ -942,7 +942,9 @@
     const renderLive = () => {
       const card = $("#dlivecard", root);
       const running = (live.nodes && live.nodes.running) || [];
-      const models = t.steps.filter((s) => live["model:" + s.id]).map((s) => [s, live["model:" + s.id]]);
+      const EXTRA = { fix: "自动修正", verify: "复核员 · 核对原因" };  // 不在步骤列表里的模型调用
+      const models = [...t.steps, ...Object.entries(EXTRA).map(([id, name]) => ({ id, name }))]
+        .filter((s) => live["model:" + s.id]).map((s) => [s, live["model:" + s.id]]);
       card.style.display = running.length || models.length ? "" : "none";
       $("#dlnodes", root).innerHTML = running.length
         ? running.map((l) => `<span class="chip"><i></i>${esc(l.split(" › ").map(nodeName).join(" › "))}</span>`).join("")
