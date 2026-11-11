@@ -74,6 +74,7 @@ tools: [read_sales_data, compute_kpis, read_minutes, search_minutes, query_kpi, 
 # ---------------------------------------------------------------- 工作步骤
 # type=tool：程序直接调用工具；type=agent：交给模型，只开放 tools 中列出的工具
 # per_version=true 的步骤在退回返工后按新版本重做；rerun_on 指定哪些章节的审核意见会触发重做（* 表示任何意见）
+# after：本步依赖的步骤（只能写前面的步骤）；没有依赖关系的步骤并行执行。不写 after 表示依赖上一步
 steps:
   - id: load
     name: 读取销售明细
@@ -101,17 +102,20 @@ steps:
       top_items: $analysis.top_items
   - id: minutes
     name: 读取周会纪要
+    after: []                           # 不依赖销售数据：与“读取销售明细”并行
     type: tool
     tool: read_minutes
     args: {file_path: $form.minutes_file}
     skip_if_empty: $form.minutes_file   # 未上传纪要时跳过本步，后续按“无纪要”处理
   - id: charts
     name: 生成图表
+    after: [kpi]                        # 与“异常原因分析”并行
     type: tool
     tool: render_charts
     args: {charts: [region_target, weekly_trend]}
   - id: analysis
     name: 异常原因分析
+    after: [kpi, minutes]
     type: agent
     purpose: analysis
     skill_sections: [岗位职责, 异常分析, 注意事项]
@@ -128,6 +132,7 @@ steps:
     rerun_on: ["*"]
   - id: render
     name: 生成交付文件
+    after: [draft, charts]
     type: render
     tool: generate_report
     per_version: true

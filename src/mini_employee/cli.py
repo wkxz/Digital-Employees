@@ -98,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("check-config", help="检查员工配置（employee.yaml / SKILL.md），现场改完先跑一次")
     p.add_argument("--employee", default="weekly_report")
     p = sub.add_parser("transitions", help="打印状态流转表")
+    sub.add_parser("graph", help="打印 LangGraph 编排图与模型步骤子图（Mermaid）")
     sub.add_parser("tools", help="列出工具及入参 Schema")
     p = sub.add_parser("cases", help="批量运行测试用例")
     p.add_argument("paths", nargs="*", default=["cases"])
@@ -111,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(errors="replace")
     if a.cmd == "check-config":
         return check_config(a.employee)
-    o = Orchestrator() if a.cmd not in ("transitions", "tools", "cases", "check-model") else None
+    o = Orchestrator() if a.cmd not in ("transitions", "graph", "tools", "cases", "check-model") else None
     try:
         if a.cmd == "new":
             faults = []
@@ -178,6 +179,17 @@ def main(argv: list[str] | None = None) -> int:
             return check_model()
         elif a.cmd == "transitions":
             print(table_markdown())
+        elif a.cmd == "graph":
+            from .llm.agent import build_agent_graph
+            from .workflow import build_task_graph, mermaid
+            agent = build_agent_graph(None, None, lambda *x: None, step_id="analyze", purpose="analysis", tools=[],
+                                      output_schema={}, max_turns=1, max_seconds=1)
+            from .workflow import build_steps_graph
+            steps = build_steps_graph(load_employee("weekly_report").steps, lambda s, r: {}, lambda f: None)
+            print(f"## 任务编排图\n\n```mermaid\n{mermaid(build_task_graph(None))}```\n")
+            print("## 步骤图（running / rework 节点内部，按 employee.yaml 中步骤的 after 构建，"
+                  f"同一层的步骤并行执行）\n\n```mermaid\n{mermaid(steps)}```\n")
+            print(f"## 模型步骤子图\n\n```mermaid\n{mermaid(agent)}```")
         elif a.cmd == "tools":
             from .tools import server
             from .tools.gateway import ToolGateway

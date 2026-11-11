@@ -7,11 +7,13 @@
 
 **核心原则：模型只负责分析和写作；状态流转、准入、数字计算、质检、能否送审和交付全部由程序判定。**
 
+任务编排基于 **LangGraph**：任务推进是一张 StateGraph（等人处理的环节用 `interrupt()` 暂停、人工操作后用 `Command(resume)` 唤醒，检查点存 SQLite），执行 / 返工节点内部是一张步骤图：7 个工作步骤各是一个节点，按 `employee.yaml` 中的 `after` 连线，没有依赖关系的步骤并行执行（读取销售明细与读取周会纪要、生成图表与异常原因分析），有步骤失败时由汇合节点统一暂停；每个模型步骤又是一张“模型 ⇄ 工具 ⇄ 校验”子图。图的边由状态流转表推出，路由是纯程序函数；SQLite 任务表仍是唯一的状态来源，所有状态变更都经过 `Store.transition()` 的闸门。流程图见 [docs/workflow.md](docs/workflow.md)（`uv run mini graph` 生成）。
+
 ## 快速开始
 
 ```bash
 make install        # 安装依赖（需要 uv）
-make test           # 单元测试 + 41 条用例 + 现场变更预演 + 真实模型调用路径测试（共 166 项，全部离线，约 5 分钟）
+make test           # 单元测试 + 41 条用例 + 现场变更预演 + 真实模型调用路径测试（共 179 项，全部离线，约 5 分钟）
 make demo           # 命令行跑一条正常任务，停在“待审核”
 make ui             # Web 界面 http://localhost:8501
 make web            # 新版控制台 http://127.0.0.1:8600（演示推荐）
@@ -91,11 +93,12 @@ employees/weekly_report/       场景 A 经营周报员工（青禾烘焙官方�
 src/mini_employee/
   states.py            状态、流转表、闸门条件
   store.py             SQLite：任务表 + 只追加的事件表；唯一的状态变更入口 transition()
-  orchestrator.py      编排器：准入 → 步骤执行 → 质检 → 修正 → 审核 → 交付；断点恢复
+  workflow.py          LangGraph 任务编排图（节点 = 状态处理函数，边由流转表推出；等人处理用 interrupt 暂停；SQLite 检查点）与步骤图（按 after 并行）
+  orchestrator.py      编排器：各状态的处理函数（准入 → 步骤执行 → 质检 → 修正 → 审核 → 交付）与人工操作；断点恢复
   tools/server.py      MCP 工具服务（FastMCP），7 个工具
   tools/gateway.py     工具网关：白名单、Schema 校验、重试、超时、故障注入、留痕
   tools/data.py        数据读取、清洗、KPI 与异常识别（所有数字在这里算）
-  llm/agent.py         Agent 步骤：模型 ⇄ 工具循环，轮次 / 时长上限，输出 Schema 校验
+  llm/agent.py         Agent 步骤（LangGraph 子图）：模型 ⇄ 工具循环，轮次 / 时长上限，输出 Schema 校验
   llm/mock.py          离线 Mock 模型
   qc/rules.py          质检规则（可插拔）
   qc/engine.py         质检引擎、程序修正、检验记录

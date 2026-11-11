@@ -1,5 +1,6 @@
 """编排器（程序控制层）：驱动任务在状态机上流转。
 
+任务推进由 LangGraph 编排图执行（见 workflow.py），图的每个节点调用这里的状态处理函数。
 准入、执行哪一步、能否送审、能否交付，全部由这里的确定性代码判定；模型只在 agent 步骤内被调用。
 每一步的输出落盘并写 step_completed 事件（含文件哈希），中断重启后据此跳过已完成步骤。
 """
@@ -28,12 +29,14 @@ from .store import IllegalTransition, Store
 from .tools import server as tool_server
 from .tools.errors import INTERNAL, INVALID_INPUT, MISSING_INPUT, ToolDenied, ToolFailure
 from .tools.gateway import ToolGateway, load_faults
-from .validate import FIX_DEFAULT, FIX_SKILL_SECTIONS, ConfigError
+from .validate import FIX_DEFAULT, FIX_SKILL_SECTIONS, ConfigError, _refs
+from .workflow import StepRun, build_task_graph, open_checkpointer, run_steps, run_task
 
 
 class Orchestrator:
     def __init__(self, store: Store | None = None):
         self.store = store or Store()
+        self._graph: Any = None
 
     # ================================================================ helpers
     @staticmethod
@@ -59,11 +62,22 @@ class Orchestrator:
     def _out(self, tid: str, key: str) -> Any:
         return read_json(self.task_dir(tid) / "steps" / f"{key}.json")
 
-    def _inputs_hash(self, task: dict) -> str:
+    def _inputs_hash(self, task: dict, keys: set[str] | None = None) -> str:
+        """输入哈希：keys 为 None 时覆盖整张表单；否则只覆盖这些表单字段（及其文件内容）。"""
         d = self.task_dir(task["id"])
-        files = {v: sha256_file(d / v) for vs in task["form"].values() for v in self._as_list(vs)
+        form = task["form"] if keys is None else {k: v for k, v in task["form"].items() if k in keys}
+        files = {v: sha256_file(d / v) for vs in form.values() for v in self._as_list(vs)
                  if isinstance(v, str) and v.startswith("inputs/") and (d / v).exists()}
-        return sha256_json({"form": task["form"], "files": files})
+        return sha256_json({"form": form, "files": files})
+
+    def _step_hashes(self, task: dict, emp: Employee, anc: dict[str, set[str]]) -> dict[str, str]:
+        """每个步骤的输入哈希。程序步骤只覆盖它和上游步骤引用的表单字段：补充销售明细时，
+        只依赖周会纪要的步骤不必重做；模型与生成步骤会用到全部表单字段，覆盖整张表单。"""
+        own = {s["id"]: {r[6:] for r in _refs([s.get("args", {}), s.get("skip_if_empty")]) if r.startswith("$form.")}
+               for s in emp.steps}
+        full = self._inputs_hash(task)
+        return {s["id"]: self._inputs_hash(task, own[s["id"]].union(*(own[a] for a in anc[s["id"]])))
+                if s["type"] == "tool" else full for s in emp.steps}
 
     def _done(self, tid: str, key: str, inputs_hash: str) -> bool:
         path = self.task_dir(tid) / "steps" / f"{key}.json"
@@ -186,29 +200,40 @@ class Orchestrator:
         return errors
 
     # ================================================================ drive
+    @property
+    def graph(self) -> Any:
+        """任务编排图（LangGraph），检查点存于任务库旁的 graph_checkpoints.sqlite。"""
+        if self._graph is None:
+            self._graph = build_task_graph(self, open_checkpointer(Path(self.store.path).parent / "graph_checkpoints.sqlite"))
+        return self._graph
+
     def drive(self, tid: str, resumed: bool = False) -> S:
-        for _ in range(200):
-            task = self.store.get(tid)
-            st = task["state"]
-            if st not in AUTO:
-                return st
-            try:
-                {S.CREATED: self._on_created, S.ADMISSION: self._on_admission, S.RUNNING: self._on_running,
-                 S.REWORK: self._on_running, S.QC: self._on_qc, S.AUTO_FIXING: self._on_fixing}[st](task, resumed)
-            except IllegalTransition:
+        """推进任务直到等人处理或结束：交给编排图执行，返回 SQLite 中的最新状态。"""
+        run_task(self.graph, tid, resumed)
+        return S(self.store.get(tid)["state"])
+
+    def advance(self, tid: str, resumed: bool = False) -> None:
+        """编排图的自动节点：执行当前状态的处理函数一次；任何异常都转人工，不崩溃。"""
+        task = self.store.get(tid)
+        st = task["state"]
+        if st not in AUTO:
+            return
+        try:
+            {S.CREATED: self._on_created, S.ADMISSION: self._on_admission, S.RUNNING: self._on_running,
+             S.REWORK: self._on_running, S.QC: self._on_qc, S.AUTO_FIXING: self._on_fixing}[st](task, resumed)
+        except IllegalTransition:
+            raise
+        except ConfigError as e:  # 任务执行中配置被改错：暂停，改正配置后重试即可
+            if st == S.CREATED:
                 raise
-            except ConfigError as e:  # 任务执行中配置被改错：暂停，改正配置后重试即可
-                if st == S.CREATED:
-                    raise
-                self.store.event(tid, "error", None, {"state": st, "error": str(e)})
-                self._pause(tid, "step_failed", f"{e}。请改正 employee.yaml / SKILL.md（可先运行 mini check-config）后，"
-                                                "选择“使用最新配置”重试。")
-            except Exception as e:  # 兜底：任何意外都转人工，不崩溃
-                if st == S.CREATED:
-                    raise
-                self.store.event(tid, "error", None, {"state": st, "error": f"{type(e).__name__}: {e}"})
-                self._pause(tid, "step_failed", f"程序异常：{type(e).__name__}: {e}。已保留断点，可重试。")
-        raise RuntimeError("状态推进次数过多，疑似循环")
+            self.store.event(tid, "error", None, {"state": st, "error": str(e)})
+            self._pause(tid, "step_failed", f"{e}。请改正 employee.yaml / SKILL.md（可先运行 mini check-config）后，"
+                                            "选择“使用最新配置”重试。")
+        except Exception as e:  # 兜底：任何意外都转人工，不崩溃
+            if st == S.CREATED:
+                raise
+            self.store.event(tid, "error", None, {"state": st, "error": f"{type(e).__name__}: {e}"})
+            self._pause(tid, "step_failed", f"程序异常：{type(e).__name__}: {e}。已保留断点，可重试。")
 
     def resume_all(self) -> list[tuple[str, S]]:
         out = []
@@ -407,73 +432,91 @@ class Orchestrator:
         return read_json(p) if p.exists() else None
 
     def _on_running(self, task: dict, resumed: bool) -> None:
-        tid, version, state = task["id"], task["version"], task["state"]
+        """执行 / 返工：按员工配置的步骤依赖构建步骤图（LangGraph），没有依赖关系的步骤并行执行。"""
         emp = self._emp(task)
-        gw = self._gateway(task, emp)
-        llm = None
-        fb = self._feedback(tid, version) if state == S.REWORK else None
-        rerun_sections = {t["section"] for t in fb["todos"]} if fb else set()
-        ih = self._inputs_hash(task)
+        fb = self._feedback(task["id"], task["version"]) if task["state"] == S.REWORK else None
+        run = StepRun(task=task, emp=emp, fb=fb, resumed=resumed,
+                      rerun_sections={t["section"] for t in fb["todos"]} if fb else set())
+        run.ih = self._step_hashes(task, emp, run.ancestors)
+        run_steps(self, run)
+
+    def _key(self, run: "StepRun", step: dict) -> str:
+        return f"{step['id']}@v{run.task['version']}" if step.get("per_version") else step["id"]
+
+    def run_step(self, run: "StepRun", step: dict, reran: set[str]) -> dict[str, Any]:
+        """步骤图的一个节点：执行一个步骤。失败时不在这里改状态，只返回失败信息，
+        由汇合节点在同一批并行步骤都结束后统一暂停（避免并行分支同时改状态）。"""
+        task, emp = run.task, run.emp
+        tid, version = task["id"], task["version"]
         steps = emp.steps
-        upstream_reran = False
-        render_out = None
-        for idx, step in enumerate(steps, 1):
-            per_v = step.get("per_version", False)
-            key = f"{step['id']}@v{version}" if per_v else step["id"]
-            if self._done(tid, key, ih):
-                if resumed:
-                    self.store.event(tid, "step_skipped", step["id"], {"key": key, "reason": "已完成，断点恢复跳过"})
-                if step["type"] == "render":
-                    render_out = self._out(tid, key)
-                continue
-            if per_v and version > 1:
-                rerun_on = set(step.get("rerun_on", ["*"]))
-                affected = upstream_reran or "*" in rerun_sections or bool(rerun_sections & rerun_on) or \
-                    ("*" in rerun_on and bool(rerun_sections))
-                prev_key = f"{step['id']}@v{version - 1}"
-                if not affected and (self.task_dir(tid) / "steps" / f"{prev_key}.json").exists():
-                    out = self._out(tid, prev_key)
-                    digest = write_json(self.task_dir(tid) / "steps" / f"{key}.json", out)
-                    self.store.event(tid, "step_completed", step["id"], {"key": key, "version": version, "sha256": digest,
-                                                                          "inputs_hash": ih, "reused_from": prev_key, "ms": 0})
-                    continue
-            used = self._budget_used(tid)
-            if used > emp.limits["max_task_seconds"]:
-                self._pause(tid, "step_failed", f"任务累计用时 {used:.0f} 秒，超过上限 {emp.limits['max_task_seconds']} 秒。"
-                                                f"已完成 {idx - 1}/{len(steps)} 步，重试将从第 {idx} 步继续。")
-                return
-            self.store.event(tid, "step_started", step["id"], {"key": key, "name": step.get("name"), "index": idx,
-                                                                "total": len(steps), "version": version})
-            t0 = time.monotonic()
-            try:
-                if step["type"] == "agent" and llm is None:
-                    llm = build_llm(emp.raw.get("model", {}), load_faults(task["meta"].get("faults")))
-                out = self._exec(step, task, emp, gw, llm, version, fb)
-            except (MissingInput, ToolFailure) as e:
-                msg = e.message if isinstance(e, ToolFailure) else str(e)
-                if isinstance(e, MissingInput) or e.kind == MISSING_INPUT:
-                    self._pause(tid, "step_missing_input",
-                                f"第 {idx}/{len(steps)} 步“{step.get('name')}”发现缺材料：{msg}。请补充后继续。")
-                else:
-                    self._pause(tid, "step_failed", f"第 {idx}/{len(steps)} 步“{step.get('name')}”失败：{msg}。"
-                                                    f"已完成 {idx - 1}/{len(steps)} 步，重试将从第 {idx} 步继续。")
-                return
-            except (StepLimitExceeded, LLMUnavailable, ToolDenied) as e:
-                self._pause(tid, "step_failed", f"第 {idx}/{len(steps)} 步“{step.get('name')}”暂停：{e}。"
-                                                f"已完成 {idx - 1}/{len(steps)} 步，可转人工处理或重试。")
-                return
-            digest = write_json(self.task_dir(tid) / "steps" / f"{key}.json", out)
-            self.store.event(tid, "step_completed", step["id"], {"key": key, "version": version, "sha256": digest,
-                                                                  "inputs_hash": ih,
-                                                                  "ms": int((time.monotonic() - t0) * 1000)})
-            if per_v:
-                upstream_reran = True
-            if step["type"] == "render":
-                render_out = out
-            if os.environ.get("MINI_CRASH_AFTER") == step["id"]:
-                os._exit(137)  # 断点恢复演示：模拟进程被强制结束
-        art = self._artifact(task, emp, render_out, version)
-        art["prev_content_path"] = fb["prev_content_path"] if fb else None
+        idx = next(i for i, s in enumerate(steps, 1) if s["id"] == step["id"])
+        per_v = step.get("per_version", False)
+        key = self._key(run, step)
+        ih = run.ih[step["id"]]
+        if self._done(tid, key, ih):
+            if run.resumed:
+                self.store.event(tid, "step_skipped", step["id"], {"key": key, "reason": "已完成，断点恢复跳过"})
+            return {}
+        if per_v and version > 1:
+            rerun_on = set(step.get("rerun_on", ["*"]))
+            upstream_reran = bool(reran & run.ancestors[step["id"]])
+            affected = upstream_reran or "*" in run.rerun_sections or bool(run.rerun_sections & rerun_on) or \
+                ("*" in rerun_on and bool(run.rerun_sections))
+            prev_key = f"{step['id']}@v{version - 1}"
+            if not affected and (self.task_dir(tid) / "steps" / f"{prev_key}.json").exists():
+                out = self._out(tid, prev_key)
+                digest = write_json(self.task_dir(tid) / "steps" / f"{key}.json", out)
+                self.store.event(tid, "step_completed", step["id"], {"key": key, "version": version, "sha256": digest,
+                                                                      "inputs_hash": ih, "reused_from": prev_key, "ms": 0})
+                return {}
+        used = self._budget_used(tid)
+        if used > emp.limits["max_task_seconds"]:
+            return {"failure": {"event": "step_failed", "idx": idx, "kind": "budget",
+                                "msg": f"任务累计用时 {used:.0f} 秒，超过上限 {emp.limits['max_task_seconds']} 秒"}}
+        self.store.event(tid, "step_started", step["id"], {"key": key, "name": step.get("name"), "index": idx,
+                                                            "total": len(steps), "version": version})
+        t0 = time.monotonic()
+        try:
+            llm = build_llm(emp.raw.get("model", {}), load_faults(task["meta"].get("faults"))) \
+                if step["type"] == "agent" else None
+            out = self._exec(step, task, emp, self._gateway(task, emp), llm, version, run.fb)
+        except (MissingInput, ToolFailure) as e:
+            msg = e.message if isinstance(e, ToolFailure) else str(e)
+            missing = isinstance(e, MissingInput) or e.kind == MISSING_INPUT
+            return {"failure": {"event": "step_missing_input" if missing else "step_failed", "idx": idx,
+                                "kind": "missing" if missing else "failed", "msg": msg}}
+        except (StepLimitExceeded, LLMUnavailable, ToolDenied) as e:
+            return {"failure": {"event": "step_failed", "idx": idx, "kind": "limit", "msg": str(e)}}
+        digest = write_json(self.task_dir(tid) / "steps" / f"{key}.json", out)
+        self.store.event(tid, "step_completed", step["id"], {"key": key, "version": version, "sha256": digest,
+                                                              "inputs_hash": ih,
+                                                              "ms": int((time.monotonic() - t0) * 1000)})
+        if os.environ.get("MINI_CRASH_AFTER") == step["id"]:
+            os._exit(137)  # 断点恢复演示：模拟进程被强制结束
+        return {"reran": [step["id"]]} if per_v else {}
+
+    def finish_steps(self, run: "StepRun", failure: dict[str, Any] | None) -> None:
+        """步骤图的汇合节点：全部步骤完成则生成产物并流转；有步骤失败则暂停并说明进度。"""
+        task, emp = run.task, run.emp
+        tid, version, state = task["id"], task["version"], task["state"]
+        steps = emp.steps
+        if failure:
+            done = sum(1 for s in steps if self._done(tid, self._key(run, s), run.ih[s["id"]]))
+            idx, msg, name = failure["idx"], failure["msg"], steps[failure["idx"] - 1].get("name")
+            total = len(steps)
+            if failure["kind"] == "missing":
+                reason = f"第 {idx}/{total} 步“{name}”发现缺材料：{msg}。请补充后继续。"
+            elif failure["kind"] == "budget":
+                reason = f"{msg}。已完成 {done}/{total} 步，重试将从第 {idx} 步继续。"
+            elif failure["kind"] == "limit":
+                reason = f"第 {idx}/{total} 步“{name}”暂停：{msg}。已完成 {done}/{total} 步，可转人工处理或重试。"
+            else:
+                reason = f"第 {idx}/{total} 步“{name}”失败：{msg}。已完成 {done}/{total} 步，重试将从第 {idx} 步继续。"
+            self._pause(tid, failure["event"], reason)
+            return
+        render_step = next(s for s in steps if s["type"] == "render")
+        art = self._artifact(task, emp, self._out(tid, self._key(run, render_step)), version)
+        art["prev_content_path"] = run.fb["prev_content_path"] if run.fb else None
         self.store.update(tid, artifact=art)
         self.store.transition(tid, "rework_done" if state == S.REWORK else "steps_done", SYSTEM,
                               {"reason": f"V{version} 已生成"}, resume_to=None)

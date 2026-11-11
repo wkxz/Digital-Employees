@@ -6,6 +6,6 @@ input:
   files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
   faults: [{tool: compute_kpis, mode: error}]
 steps:
-  - expect: {state: SUSPENDED, pause_contains: [compute_kpis, 已重试 3 次, 已完成 1/7 步, 重试将从第 2 步继续]}
+  - expect: {state: SUSPENDED, pause_contains: [compute_kpis, 已重试 3 次, 已完成 2/7 步, 重试将从第 2 步继续]}
   - retry: {clear_faults: true}
   - expect: {state: PENDING_REVIEW, step_runs: {load: 1, kpi: 2, minutes: 1, charts: 1, analysis: 1}}

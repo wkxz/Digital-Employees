@@ -24,6 +24,39 @@ FIX_DEFAULT = "根据 failures 中列出的问题修改 content，只改有问�
 META_KEYS = {"period", "period_compact", "period_label", "version", "generated_at", "sources"}  # 渲染时可引用的内置字段
 
 
+def _check_step_order(steps: list[dict[str, Any]], err: Any) -> None:
+    """after（步骤依赖）只能引用前面的步骤；并行执行时，每步用到的数据必须来自它依赖的步骤。"""
+    seen: list[str] = []
+    for i, s in enumerate(steps, 1):
+        after = s.get("after")
+        if after is not None:
+            if not isinstance(after, list) or not all(isinstance(x, str) for x in after):
+                err(f"steps 第 {i} 步（{s.get('id', '?')}）的 after 须为步骤 id 列表，如 [kpi, minutes]")
+                return
+            for d in after:
+                if d not in seen:
+                    err(f"steps 第 {i} 步（{s.get('id', '?')}）的 after 引用了 {d}：只能引用写在它前面的步骤")
+                    return
+        seen.append(s.get("id"))
+    from .workflow import ancestors, step_deps
+    anc = ancestors(step_deps(steps))
+    by_purpose = {s.get("purpose"): s["id"] for s in steps if s.get("type") == "agent"}
+    charts = next((s["id"] for s in steps if s.get("tool") == "render_charts"), None)
+    need: dict[str, set[str]] = {"kpi": {"load"}}
+    if charts:
+        need[charts] = {"kpi"}
+    if "analysis" in by_purpose:
+        need[by_purpose["analysis"]] = {"kpi", "minutes"}
+    if "draft" in by_purpose:
+        need[by_purpose["draft"]] = {"kpi", "minutes"} | ({by_purpose["analysis"]} if "analysis" in by_purpose else set())
+    render = next((s["id"] for s in steps if s.get("type") == "render"), None)
+    if render:
+        need[render] = set(by_purpose.values()) | ({charts} if charts else set())
+    for sid, req in need.items():
+        if sid in anc and (miss := sorted(req - anc[sid] - {sid})):
+            err(f"步骤 {sid} 用到 {miss} 的结果，但没有（直接或间接）依赖它们：请在 after 中补上，否则并行执行时可能读不到数据")
+
+
 class ConfigError(Exception):
     def __init__(self, employee_id: str, errors: list[str]):
         super().__init__(f"员工 {employee_id} 的配置有误：" + "；".join(errors))
@@ -145,6 +178,7 @@ def validate(raw: dict[str, Any], skill_sections: dict[str, str]) -> tuple[list[
     dup = sorted({k for k in step_ids if k and step_ids.count(k) > 1})
     if dup:
         err(f"steps 中步骤 id 重复：{dup}")
+    _check_step_order(raw["steps"] or [], err)
     if not {"load", "kpi", "minutes"} <= set(step_ids):
         err("steps 须包含 load / kpi / minutes 三个读取数据的步骤")
     if not ({"analysis", "draft"} <= purposes and "render" in {s.get("type") for s in raw["steps"]}):
