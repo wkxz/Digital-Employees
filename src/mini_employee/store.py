@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,10 @@ CREATE TABLE IF NOT EXISTS events (
   type TEXT NOT NULL, step_id TEXT, payload_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_events_task ON events(task_id, seq);
+CREATE TABLE IF NOT EXISTS live (   -- 运行中的实时进度（当前节点、模型正在输出的内容）：按 key 覆盖写，供网页推送
+  task_id TEXT NOT NULL, key TEXT NOT NULL, seq INTEGER NOT NULL, data_json TEXT NOT NULL,
+  PRIMARY KEY(task_id, key)
+);
 CREATE TABLE IF NOT EXISTS config_changes (   -- 员工配置变更记录（只追加）：谁、何时、改了哪个文件、改前改后全文
   seq INTEGER PRIMARY KEY AUTOINCREMENT, employee TEXT NOT NULL, file TEXT NOT NULL, ts TEXT NOT NULL,
   user TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', sha_before TEXT, sha_after TEXT NOT NULL,
@@ -123,6 +128,24 @@ class Store:
                 args += types
             rows = self.db.execute(sql + " ORDER BY seq", args).fetchall()
             return [{**dict(r), "payload": json.loads(r["payload_json"])} for r in rows]
+
+    # ------------------------------------------------------------ live progress
+    def live_set(self, tid: str, key: str, data: dict[str, Any]) -> None:
+        """写一条实时进度（同一 key 覆盖）。seq 取微秒时间戳并保证递增（清空后也不回退），读取方据此只取变化的部分。"""
+        with self._lock:
+            self.db.execute("INSERT OR REPLACE INTO live(task_id, key, seq, data_json) "
+                            "VALUES (?, ?, MAX(?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM live)), ?)",
+                            (tid, key, time.time_ns() // 1000, json.dumps(data, ensure_ascii=False, default=str)))
+
+    def live(self, tid: str, after: int = 0) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.db.execute("SELECT key, seq, data_json FROM live WHERE task_id=? AND seq>? ORDER BY seq",
+                                   (tid, after)).fetchall()
+            return [{"key": r["key"], "seq": r["seq"], "data": json.loads(r["data_json"])} for r in rows]
+
+    def live_clear(self, tid: str) -> None:
+        with self._lock:
+            self.db.execute("DELETE FROM live WHERE task_id=?", (tid,))
 
     # ------------------------------------------------------------ config changes
     def config_change(self, employee: str, file: str, user: str, before: str | None, after: str,

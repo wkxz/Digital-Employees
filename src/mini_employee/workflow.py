@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import operator
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, TypedDict
@@ -114,16 +115,53 @@ def open_checkpointer(path: Path) -> SqliteSaver:
     return saver
 
 
-def run_task(graph: Any, tid: str, resumed: bool = False) -> None:
-    """推进任务直到等人处理或结束。图停在等人节点时唤醒它，否则从 START 按 SQLite 状态路由。"""
+class LiveSink:
+    """把图的流式输出写成实时进度（Store.live）：哪些节点正在运行、模型正在输出什么。
+    网页在另一个进程里，经 SQLite 读取后用 SSE 推给浏览器。模型输出按步骤节流写入，避免频繁写库。"""
+    THROTTLE = 0.3
+
+    def __init__(self, store: Any, tid: str):
+        self.store, self.tid = store, tid
+        self.running: dict[str, str] = {}
+        self.last: dict[str, float] = {}
+
+    def __call__(self, ns: tuple[str, ...], mode: str, chunk: Any) -> None:
+        if mode == "tasks":  # 节点开始（带 triggers）/ 结束（带 result 或 error）
+            label = " › ".join([*(p.split(":")[0] for p in ns), chunk["name"]])
+            if "triggers" in chunk:
+                self.running[chunk["id"]] = label
+            else:
+                self.running.pop(chunk["id"], None)
+            self.store.live_set(self.tid, "nodes", {"running": list(self.running.values())})
+        elif mode == "custom" and isinstance(chunk, dict) and chunk.get("type") == "model":
+            key = f"model:{chunk['step']}"
+            now = time.monotonic()
+            if chunk.get("done") or now - self.last.get(key, 0) >= self.THROTTLE:
+                self.last[key] = now
+                self.store.live_set(self.tid, key, {k: v for k, v in chunk.items() if k != "type"})
+
+    def close(self) -> None:
+        self.store.live_set(self.tid, "nodes", {"running": []})
+
+
+def run_task(graph: Any, tid: str, resumed: bool = False, store: Any | None = None) -> None:
+    """推进任务直到等人处理或结束。图停在等人节点时唤醒它，否则从 START 按 SQLite 状态路由。
+    传入 store 时以流式方式运行（含子图），把节点进度与模型输出写入实时进度表。"""
     cfg = {"configurable": {"thread_id": tid}, "recursion_limit": MAX_HOPS}
     snap = graph.get_state(cfg)
     waiting = any(t.interrupts for t in snap.tasks) if snap and snap.next else False
+    inp = Command(resume={"task_id": tid}) if waiting else {"task_id": tid, "resumed": resumed}
     try:
-        if waiting:
-            graph.invoke(Command(resume={"task_id": tid}), cfg)
-        else:
-            graph.invoke({"task_id": tid, "resumed": resumed}, cfg)
+        if store is None:
+            graph.invoke(inp, cfg)
+            return
+        store.live_clear(tid)
+        sink = LiveSink(store, tid)
+        try:
+            for ns, mode, chunk in graph.stream(inp, cfg, stream_mode=["tasks", "custom"], subgraphs=True):
+                sink(ns, mode, chunk)
+        finally:
+            sink.close()
     except GraphRecursionError as e:
         raise RuntimeError("状态推进次数过多，疑似循环") from e
 
@@ -201,7 +239,7 @@ def build_steps_graph(steps: list[dict[str, Any]], run_one: Any, finish: Any):
     sinks = [sid for sid in deps if sid not in used]
     g.add_edge(sinks if len(sinks) > 1 else sinks[0], "finish")
     g.add_edge("finish", END)
-    return g.compile(name="steps")
+    return g.compile(name="steps", checkpointer=False)  # 步骤结果已落盘，子图不写检查点
 
 
 def run_steps(orch: "Orchestrator", run: StepRun) -> None:

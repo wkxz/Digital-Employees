@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import webbrowser
 from http import HTTPStatus
@@ -488,8 +489,73 @@ ROUTES_POST = [
 ]
 
 
+SSE_TICK, SSE_HEARTBEAT, SSE_MAX = 0.3, 15.0, 600.0  # 检查间隔、心跳（防代理断开空闲连接）、单次连接最长时长
+
+
+def sse_frames(tid: str, ev: int, lv: int, rv: int) -> tuple[list[str], int, int, int, bool]:
+    """读取任务自上次推送以来的变化，生成 SSE 帧。返回（帧, 事件游标, 实时进度游标, 行版本, 是否已结束）。
+    live：节点进度与模型输出（直接推送内容）；tick：任务状态或事件有变化（页面据此立即刷新）。"""
+    with LOCK:
+        st = orch().store
+        t = st.get(tid)
+        rows = st.live(tid, lv)
+        last = st.db.execute("SELECT COALESCE(MAX(seq), 0) FROM events WHERE task_id=?", (tid,)).fetchone()[0]
+    frames = []
+    for r in rows:
+        lv = r["seq"]
+        frames.append(sse_frame("live", r, f"{ev}.{lv}"))
+    if last != ev or t["row_version"] != rv:
+        ev, rv = last, t["row_version"]
+        frames.append(sse_frame("tick", {"state": t["state"].value, "row_version": rv, "event_seq": ev}, f"{ev}.{lv}"))
+    return frames, ev, lv, rv, t["state"] in TERMINAL
+
+
+def sse_frame(event: str, data: Any, id_: str | None = None) -> str:
+    head = f"id: {id_}\n" if id_ else ""
+    return f"{head}event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+
+
+def parse_cursor(raw: str | None) -> tuple[int, int]:
+    try:
+        a, b = (raw or "").split(".")
+        return int(a), int(b)
+    except ValueError:
+        return 0, 0
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "MiniEmployee/1.0"
+
+    def _sse(self, tid: str, q: dict[str, list[str]]) -> None:
+        """任务实时推送（Server-Sent Events）。执行任务的子进程把进度写入 SQLite，这里读出变化推给浏览器；
+        断线后浏览器带 Last-Event-ID 自动重连，从上次的位置继续。"""
+        with LOCK:
+            orch().store.get(tid)  # 任务不存在时返回 404
+        ev, lv = parse_cursor(self.headers.get("Last-Event-ID") or (q.get("cursor") or [""])[0])
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")  # 反向代理不要缓冲
+        self.end_headers()
+        rv, t0, beat = -1, time.monotonic(), time.monotonic()
+        try:
+            self.wfile.write(b"retry: 2000\n\n")
+            while time.monotonic() - t0 < SSE_MAX:
+                frames, ev, lv, rv, ended = sse_frames(tid, ev, lv, rv)
+                if frames:
+                    self.wfile.write("".join(frames).encode("utf-8"))
+                    beat = time.monotonic()
+                elif time.monotonic() - beat > SSE_HEARTBEAT:
+                    self.wfile.write(b": ping\n\n")
+                    beat = time.monotonic()
+                self.wfile.flush()
+                if ended:
+                    self.wfile.write(sse_frame("end", {}).encode("utf-8"))
+                    self.wfile.flush()
+                    return
+                time.sleep(SSE_TICK)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass  # 浏览器离开页面
 
     def log_message(self, fmt: str, *args: Any) -> None:  # 只打印出错的请求，保持终端干净
         if args and str(args[1])[:1] in ("4", "5"):
@@ -529,6 +595,9 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(u.path)
         q = parse_qs(u.query)
         try:
+            m = re.match(r"^/api/tasks/([\w-]+)/stream$", path)
+            if m:
+                return self._sse(m[1], q)
             m = re.match(r"^/api/tasks/([\w-]+)/file$", path)
             if m:
                 with LOCK:

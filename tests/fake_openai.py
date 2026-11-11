@@ -44,6 +44,9 @@ class _Handler(BaseHTTPRequestHandler):
             r = MockLLM().chat(msgs, body.get("tools", []), {"purpose": purpose, "turn": turn})
             content, calls = r.content, [{"id": c.id, "type": "function", "function": {
                 "name": c.name, "arguments": json.dumps(c.arguments, ensure_ascii=False)}} for c in r.tool_calls]
+        _Handler.calls[-1]["stream"] = bool(body.get("stream"))
+        if body.get("stream"):
+            return self._stream(body["model"], content, calls)
         msg = {"role": "assistant", "content": content}
         if calls:
             msg["tool_calls"] = calls
@@ -60,6 +63,35 @@ class _Handler(BaseHTTPRequestHandler):
             return None, [{"id": "c1", "type": "function", "function": {"name": "query_kpi",
                                                                          "arguments": '{"prefix": "region.华东"}'}}]
         return '{"region": "华东", "sales_wow": "-20.0%"}', []
+
+    def _stream(self, model: str, content: str | None, calls: list[dict]) -> None:
+        """按 OpenAI 流式协议（SSE）分片返回：文本分段；工具调用按 index 分片，参数拆成两段；最后一片带 usage。"""
+        def chunk(delta: dict | None, finish: str | None = None, usage: dict | None = None) -> bytes:
+            obj = {"id": "x", "object": "chat.completion.chunk", "created": int(time.time()), "model": model,
+                   "choices": [] if delta is None else [{"index": 0, "delta": delta, "finish_reason": finish}]}
+            if usage:
+                obj["usage"] = usage
+            return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode()
+
+        parts = [chunk({"role": "assistant", "content": ""})]
+        text = content or ""
+        n = max(1, len(text) // 5)
+        parts += [chunk({"content": text[i:i + n]}) for i in range(0, len(text), n)]
+        for i, c in enumerate(calls):
+            args = c["function"]["arguments"]
+            h = len(args) // 2
+            parts.append(chunk({"tool_calls": [{"index": i, "id": c["id"], "type": "function",
+                                                "function": {"name": c["function"]["name"], "arguments": args[:h]}}]}))
+            parts.append(chunk({"tool_calls": [{"index": i, "function": {"arguments": args[h:]}}]}))
+        parts.append(chunk({}, "tool_calls" if calls else "stop"))
+        parts.append(chunk(None, usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}))
+        parts.append(b"data: [DONE]\n\n")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        for p in parts:
+            self.wfile.write(p)
+            self.wfile.flush()
 
     def _send(self, code: int, obj: dict) -> None:
         data = json.dumps(obj, ensure_ascii=False).encode()

@@ -719,6 +719,7 @@
       <div id="dact"></div>
       <div id="dedit"></div>
       <div class="card" data-reveal style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot"></span>工作步骤</div><span class="faint" style="font-size:12px">完成的步骤落盘并记录哈希，断点恢复时跳过</span></div><div class="pipeline" id="dpipe" style="--n:${t.steps.length}"></div></div>
+      <div class="card" id="dlivecard" style="margin-top:18px;display:none"><div class="row-between"><div class="card-title"><span class="dot"></span>实时进度 · 模型输出</div><span class="faint" style="font-size:12px" id="dlconn">实时推送</span></div><div class="live-nodes" id="dlnodes"></div><div id="dlmodels"></div></div>
       <div class="card" data-reveal style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot"></span>状态轨迹</div><a class="link-arrow" href="#/events/${esc(id)}">完整回放 ${I.arrow}</a></div><div id="dgraph"></div></div>
       <div class="card" data-reveal style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot"></span>实时事件 · 只追加</div><span class="faint mono" style="font-size:12px" id="dcount"></span></div><div class="feed" id="dfeed"></div></div>
       <div id="dkpi"></div>`;
@@ -934,6 +935,38 @@
         return `<div class="pipe-step ${cls}"><div class="ps-n"><span>0${i + 1}</span><b>${s.status === "done" ? "✓" : s.status === "running" ? (halted ? "!" : "…") : ""}</b></div><div class="ps-name">${esc(s.name)}</div><div class="ps-type">${s.type === "agent" ? "模型 · 只开放指定工具" : s.type === "render" ? "程序 · 生成文件" : "程序 · 调用工具"}</div><i class="ps-bar"></i></div>`;
       }).join("");
     };
+    /* 实时进度：服务端经 SSE 推送正在运行的节点与模型流式输出（执行任务的进程写入 SQLite，网页进程读出推送） */
+    const live = {};
+    const NODE_NAMES = { created: "创建", admission: "准入校验", running: "执行步骤", rework: "返工", qc: "质检", auto_fix: "自动修正", finish: "汇总产物", model: "模型生成", tools: "调用工具", parse: "校验输出" };
+    const nodeName = (p) => NODE_NAMES[p] || ((t.steps.find((s) => s.id === p) || {}).name) || p;
+    const renderLive = () => {
+      const card = $("#dlivecard", root);
+      const running = (live.nodes && live.nodes.running) || [];
+      const models = t.steps.filter((s) => live["model:" + s.id]).map((s) => [s, live["model:" + s.id]]);
+      card.style.display = running.length || models.length ? "" : "none";
+      $("#dlnodes", root).innerHTML = running.length
+        ? running.map((l) => `<span class="chip"><i></i>${esc(l.split(" › ").map(nodeName).join(" › "))}</span>`).join("")
+        : `<span class="faint" style="font-size:12px">${AUTO.includes(t.state) ? "等待下一个节点…" : "当前没有运行中的节点"}</span>`;
+      const box = $("#dlmodels", root);
+      models.forEach(([s, m]) => {
+        let el = box.querySelector(`[data-step="${s.id}"]`);
+        if (!el) {
+          el = document.createElement("div");
+          el.className = "live-model";
+          el.dataset.step = s.id;
+          el.innerHTML = `<div class="lm-head"><b></b><span class="mono"></span></div><pre></pre>`;
+          box.appendChild(el);
+        }
+        const on = !m.done && AUTO.includes(t.state);
+        el.classList.toggle("on", on);
+        el.querySelector("b").textContent = `${s.name} · 第 ${m.turn} 轮`;
+        el.querySelector(".mono").textContent = on ? "生成中…" : (m.tool_calls && m.tool_calls.length ? "调用工具：" + m.tool_calls.join("、") : "本轮完成");
+        const pre = el.querySelector("pre");
+        const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+        pre.textContent = m.text || (m.tool_calls && m.tool_calls.length ? "（本轮只调用工具，没有文字输出）" : "");
+        if (stick) pre.scrollTop = pre.scrollHeight;
+      });
+    };
     const feed = $("#dfeed", root);
     const pushEvents = (list, animate) => {
       list.forEach((e) => {
@@ -996,7 +1029,7 @@
     prevState = t.state;
     renderKpi();
 
-    async function refresh() {
+    async function doRefresh() {
       const [nt, ne] = await Promise.all([API.get(`/api/tasks/${id}`), API.get(`/api/tasks/${id}/events`)]);
       if (!scope.alive) return;
       t = nt; events = ne;
@@ -1009,11 +1042,32 @@
         scope.later(() => graph.setPath(Graph.pathFromEvents(events), t.state), moves.length * 380 + 600);
       }
       renderPipe();
+      renderLive();
       if (t.state !== prevState) { prevState = t.state; onState(false); }
       else renderMeta();
       renderKpi();
     }
-    scope.poll(refresh, () => (AUTO.includes(t.state) ? 900 : 3000));
+    // 推送、轮询、操作后都会触发刷新：同一时间只跑一次，期间又有变化则结束后再刷一次，避免事件重复显示
+    let inflight = null, again = false;
+    function refresh() {
+      if (inflight) { again = true; return inflight; }
+      inflight = (async () => { do { again = false; await doRefresh(); } while (again && scope.alive); })()
+        .finally(() => { inflight = null; });
+      return inflight;
+    }
+    // 实时推送：任务有变化（状态 / 事件）立即刷新，节点进度与模型输出直接渲染；连不上时退回轮询
+    let sse = false;
+    const kick = () => refresh().catch((e) => console.warn(e));
+    if (window.EventSource) {
+      const es = new EventSource(`/api/tasks/${encodeURIComponent(id)}/stream`);
+      scope.on(() => es.close());
+      es.addEventListener("open", () => { sse = true; $("#dlconn", root).textContent = "实时推送"; });
+      es.addEventListener("error", () => { sse = false; $("#dlconn", root).textContent = "连接中断，改为定时刷新"; });
+      es.addEventListener("live", (m) => { const r = JSON.parse(m.data); live[r.key] = r.data; renderLive(); });
+      es.addEventListener("tick", () => kick());
+      es.addEventListener("end", () => { es.close(); sse = false; kick(); });
+    }
+    scope.poll(refresh, () => (sse ? 5000 : AUTO.includes(t.state) ? 900 : 3000));
   }
 
   /* ================================================================ 04 审核台 */

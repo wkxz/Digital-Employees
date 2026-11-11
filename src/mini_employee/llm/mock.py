@@ -56,6 +56,14 @@ class MockLLM:
 
     # ------------------------------------------------------------ protocol
     def chat(self, messages: list[dict[str, Any]], tools: list[dict], meta: dict[str, Any]) -> LLMResponse:
+        resp = self._chat(messages, tools, meta)
+        if meta.get("on_delta") and resp.content:  # 模拟流式输出：分段回调最终文本
+            step = max(1, len(resp.content) // 8)
+            for i in range(step, len(resp.content) + step, step):
+                meta["on_delta"](resp.content[:i])
+        return resp
+
+    def _chat(self, messages: list[dict[str, Any]], tools: list[dict], meta: dict[str, Any]) -> LLMResponse:
         if "llm:timeout" in self.faults:
             raise LLMUnavailable("[故障注入] 模型接口连接超时（模拟断网）")
         if "slow" in self.faults:

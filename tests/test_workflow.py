@@ -194,3 +194,32 @@ def test_supplement_sales_does_not_rerun_minutes(orch, sample_files):
     after = orch._step_hashes(t2, run.emp, run.ancestors)
     assert before["minutes"] == after["minutes"], "周会纪要步骤不依赖销售明细"
     assert before["load"] != after["load"] and before["kpi"] != after["kpi"]
+
+
+# ================================================================ 实时进度（流式运行）
+
+def test_drive_streams_node_progress_and_model_output(orch, sample_files):
+    tid = orch.create("weekly_report", {"period": "2026-W44"}, sample_files, user="张三")
+    assert orch.drive(tid) == S.PENDING_REVIEW
+    live = {r["key"]: r["data"] for r in orch.store.live(tid)}
+    assert live["nodes"] == {"running": []}, "运行结束后不应残留正在运行的节点"
+    for sid in ("analysis", "draft"):  # 两个 agent 步骤的模型输出都写入了实时进度
+        m = live[f"model:{sid}"]
+        assert m["done"] and m["text"].strip().startswith("```json")
+    seqs = [r["seq"] for r in orch.store.live(tid)]
+    assert seqs == sorted(seqs) and orch.store.live(tid, after=seqs[-1]) == []
+
+
+def test_live_sink_tracks_nested_nodes_and_throttles_deltas(orch):
+    from mini_employee.workflow import LiveSink
+    sink = LiveSink(orch.store, "T1")
+    sink(("running:a",), "tasks", {"id": "1", "name": "analysis", "input": {}, "triggers": []})
+    sink(("running:a", "analysis:b"), "tasks", {"id": "2", "name": "model", "input": {}, "triggers": []})
+    assert orch.store.live("T1")[-1]["data"]["running"] == ["running › analysis", "running › analysis › model"]
+    for i in range(20):  # 连续的增量只写第一条，最后的 done 一定写
+        sink(("running:a", "analysis:b"), "custom", {"type": "model", "step": "analysis", "text": "x" * i, "done": False})
+    sink(("running:a", "analysis:b"), "custom", {"type": "model", "step": "analysis", "text": "final", "done": True})
+    rows = {r["key"]: r["data"] for r in orch.store.live("T1")}
+    assert rows["model:analysis"]["text"] == "final"
+    sink(("running:a", "analysis:b"), "tasks", {"id": "2", "name": "model", "result": {}, "error": None})
+    assert orch.store.live("T1")[-1]["data"]["running"] == ["running › analysis"]

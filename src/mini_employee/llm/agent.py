@@ -17,6 +17,7 @@ import time
 from typing import Any, Callable, TypedDict
 
 import jsonschema
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
 from ..tools.errors import BAD_ARGS, MISSING_INPUT, ToolDenied, ToolFailure
@@ -75,7 +76,15 @@ def build_agent_graph(llm: LLM, gateway: Any, emit: Emit, *, step_id: str, purpo
         if last_turn:  # 最后一轮：收回工具，要求基于已有信息直接给出结果，而不是继续检索
             messages.append({"role": "user", "content": WRAP_UP})
         c0 = time.monotonic()
-        resp = llm.chat(messages, [] if last_turn else tool_defs, {**meta, "turn": turn, "wrap_up": last_turn})
+        write = get_stream_writer()  # 流式输出：模型边生成边推送（外层以 stream 运行时网页可实时看到）
+
+        def on_delta(text: str) -> None:
+            write({"type": "model", "step": step_id, "turn": turn, "text": text[-4000:], "done": False})
+
+        resp = llm.chat(messages, [] if last_turn else tool_defs,
+                        {**meta, "turn": turn, "wrap_up": last_turn, "on_delta": on_delta})
+        write({"type": "model", "step": step_id, "turn": turn, "text": (resp.content or "")[-4000:], "done": True,
+               "tool_calls": [c.name for c in resp.tool_calls]})
         emit("model_called", step_id, {
             "model": llm.name, "purpose": purpose, "turn": turn, "ms": int((time.monotonic() - c0) * 1000),
             "usage": resp.usage,
@@ -140,7 +149,7 @@ def build_agent_graph(llm: LLM, gateway: Any, emit: Emit, *, step_id: str, purpo
     g.add_conditional_edges("model", after_model, ["tools", "parse"])
     g.add_edge("tools", "model")
     g.add_conditional_edges("parse", after_parse, ["model", END])
-    return g.compile(name=f"agent:{step_id}")
+    return g.compile(name=f"agent:{step_id}", checkpointer=False)  # 对话不写检查点（结果已落盘）
 
 
 def run_agent_step(llm: LLM, gateway: Any, emit: Emit, *, step_id: str, purpose: str, system: str,

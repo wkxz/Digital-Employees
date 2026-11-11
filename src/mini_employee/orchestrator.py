@@ -209,7 +209,7 @@ class Orchestrator:
 
     def drive(self, tid: str, resumed: bool = False) -> S:
         """推进任务直到等人处理或结束：交给编排图执行，返回 SQLite 中的最新状态。"""
-        run_task(self.graph, tid, resumed)
+        run_task(self.graph, tid, resumed, self.store)
         return S(self.store.get(tid)["state"])
 
     def advance(self, tid: str, resumed: bool = False) -> None:

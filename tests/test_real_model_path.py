@@ -40,3 +40,4 @@ def test_cases_over_http(fake_server, cid, tmp_path, monkeypatch):
     purposes = {c["purpose"] for c in fake_openai._Handler.calls}
     assert {"analysis", "draft"} <= purposes
     assert all("generate_report" not in c["tools"] for c in fake_openai._Handler.calls)  # 模型只看到开放的工具
+    assert any(c.get("stream") for c in fake_openai._Handler.calls if c["purpose"] == "analysis"), "agent 步骤应以流式调用模型"
