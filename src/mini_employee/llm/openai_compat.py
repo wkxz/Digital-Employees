@@ -20,7 +20,8 @@ class OpenAICompatLLM:
             raise LLMUnavailable(f"未配置 API Key：请在 .env 中填写 MINI_API_KEY（或 {api_key_env}）")
         self.name = f"{provider}:{model}"
         self.model, self.temperature, self.max_retries = model, temperature, max_retries
-        self.client = openai.OpenAI(api_key=key, base_url=base_url, timeout=timeout, max_retries=0)
+        from ..tracing import wrap_client
+        self.client = wrap_client(openai.OpenAI(api_key=key, base_url=base_url, timeout=timeout, max_retries=0))
         self._openai = openai
         self.faults = faults or []
         self.streaming = True

@@ -107,6 +107,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--report", default="reports/case_report.md")
     p.add_argument("-k", dest="only", help="只运行 id 包含该字符串的用例")
     p.add_argument("-j", dest="jobs", type=int, default=1, help="并行进程数（真实模型建议 4）")
+    p = sub.add_parser("eval", help="对比评测：同一批用例在不同模型 / 岗位说明 / 配置下各跑一遍并汇总")
+    p.add_argument("spec", nargs="?", default="evals/example.yaml")
+    p.add_argument("--report", default="reports/eval_report.md")
+    p.add_argument("-k", dest="only", help="只运行 id 包含该字符串的用例")
+    p.add_argument("-j", dest="jobs", type=int, help="每个方案内并行的进程数（默认取评测文件中的 jobs）")
 
     a = ap.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):  # Windows 中文环境输出被重定向时编码为 GBK，✓ 等符号替换显示而不报错
@@ -114,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(errors="replace")
     if a.cmd == "check-config":
         return check_config(a.employee)
-    o = Orchestrator() if a.cmd not in ("transitions", "graph", "tools", "cases", "check-model") else None
+    o = Orchestrator() if a.cmd not in ("transitions", "graph", "tools", "cases", "eval", "check-model") else None
     try:
         if a.cmd == "new":
             faults = []
@@ -215,6 +220,9 @@ def main(argv: list[str] | None = None) -> int:
         elif a.cmd == "cases":
             from .runner import run_cases
             return run_cases(a.paths, a.report, a.only, a.jobs)
+        elif a.cmd == "eval":
+            from .evaluate import run_eval
+            return run_eval(a.spec, a.report, a.jobs, a.only)
     except FeedbackCheck as e:
         lines = [f"  - “{i['instruction']}”：{i['msg']}" for i in e.issues]
         print("审核意见可能有误，未提交：", *lines, "确认无误时加 --confirm 再提交。", sep="\n", file=sys.stderr)

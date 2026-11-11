@@ -1,0 +1,22 @@
+# 对比评测示例：uv run mini eval evals/example.yaml
+# 同一批用例在每个方案下各跑一遍，报告写到 reports/eval_report.md（通过率、token、耗时、首次质检通过、自动修正、返工、复核员判定）。
+# 真实模型下每个方案约 1 万～1.5 万 token / 条用例；先用少量用例试跑。
+
+cases: [A01, A04, B01, M01, N01]
+jobs: 4
+
+variants:
+  - name: 当前配置                  # 现在的 .env 与 employees/ 下的配置
+
+  # 换模型：用环境变量覆盖（与 .env 中的写法相同；密钥写变量名对应的值，报告中不显示含 KEY 的变量）
+  # - name: deepseek-chat
+  #   env: {MINI_MODEL_NAME: deepseek-chat}
+
+  # 改提示词：在岗位说明（SKILL.md）副本上做文字替换，不改动正式配置
+  - name: 摘要压到 4 条
+    skill_patch:
+      - {old: "summary（本周摘要）：不超过 5 条", new: "summary（本周摘要）：不超过 4 条"}
+
+  # 改配置：点号路径修改 employee.yaml 副本中的字段
+  # - name: 温度 0.7
+  #   employee: {model.temperature: 0.7}

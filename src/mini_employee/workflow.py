@@ -147,7 +147,8 @@ class LiveSink:
 def run_task(graph: Any, tid: str, resumed: bool = False, store: Any | None = None) -> None:
     """推进任务直到等人处理或结束。图停在等人节点时唤醒它，否则从 START 按 SQLite 状态路由。
     传入 store 时以流式方式运行（含子图），把节点进度与模型输出写入实时进度表。"""
-    cfg = {"configurable": {"thread_id": tid}, "recursion_limit": MAX_HOPS}
+    from .tracing import run_config
+    cfg = {"configurable": {"thread_id": tid}, "recursion_limit": MAX_HOPS, **run_config(tid)}
     snap = graph.get_state(cfg)
     waiting = any(t.interrupts for t in snap.tasks) if snap and snap.next else False
     inp = Command(resume={"task_id": tid}) if waiting else {"task_id": tid, "resumed": resumed}

@@ -17,7 +17,7 @@
 
 ```bash
 make install        # 安装依赖（需要 uv）
-make test           # 单元测试 + 41 条用例 + 现场变更预演 + 真实模型调用路径测试（共 192 项，全部离线，约 5 分钟）
+make test           # 单元测试 + 41 条用例 + 现场变更预演 + 真实模型调用路径测试（共 197 项，全部离线，约 5 分钟）
 make demo           # 命令行跑一条正常任务，停在“待审核”
 make ui             # Web 界面 http://localhost:8501
 make web            # 新版控制台 http://127.0.0.1:8600（演示推荐）
@@ -93,6 +93,10 @@ uv run mini cases           # 用真实模型跑全部用例（7 条依赖 Mock 
 改回离线 Mock：`.env` 中设 `MINI_MODEL=mock`。单元测试（`make test`）始终使用 Mock，另有一组测试通过本地假 OpenAI 服务覆盖真实模型的 HTTP 调用路径。
 用例中 `report_contains` 检查事实与程序生成的文字，任何模型都须满足；`report_contains_mock` 是 Mock 的固定措辞，真实模型下不检查。
 
+**对比评测**（换模型、改提示词前先比一比）：`uv run mini eval evals/example.yaml` 让同一批用例在多个方案下各跑一遍——方案可以换模型（环境变量）、改岗位说明（在 SKILL.md 副本上做文字替换）或改配置字段（employee.yaml 副本），正式配置不受影响；报告 `reports/eval_report.md` 汇总每个方案的通过率、token、模型调用与耗时、各版本首次质检通过、自动修正、退回返工和复核员判定，并逐条用例对比。
+
+**LangSmith 追踪**（可选，默认关闭）：`.env` 中设置 `LANGSMITH_TRACING=true`、`LANGSMITH_API_KEY=…`（可选 `LANGSMITH_PROJECT`）后，编排图、步骤图、模型子图的每个节点和每次模型调用（提示词、输出、token、耗时）都会上报为一棵调用树，按元数据 `task_id` 可筛出一个任务的完整执行过程。开启后提示词与模型输出会发送到 LangSmith，敏感数据请用自建实例（`LANGSMITH_ENDPOINT`）或设置 `LANGSMITH_HIDE_INPUTS` / `LANGSMITH_HIDE_OUTPUTS`。
+
 ## 目录
 
 ```
@@ -103,6 +107,8 @@ employees/weekly_report/       场景 A 经营周报员工（青禾烘焙官方�
 src/mini_employee/
   states.py            状态、流转表、闸门条件
   store.py             SQLite：任务表 + 只追加的事件表；唯一的状态变更入口 transition()
+  evaluate.py          对比评测（mini eval）：多个方案（模型 / 岗位说明 / 配置）各跑一遍用例并汇总
+  tracing.py           可选的 LangSmith 追踪（环境变量开启）
   memory.py            跨周长期记忆（LangGraph SqliteStore）：交付时记住要点，下一周撰写时取出
   workflow.py          LangGraph 任务编排图（节点 = 状态处理函数，边由流转表推出；等人处理用 interrupt 暂停；SQLite 检查点）与步骤图（按 after 并行）；流式运行时写实时进度
   orchestrator.py      编排器：各状态的处理函数（准入 → 步骤执行 → 质检 → 修正 → 审核 → 交付）与人工操作；断点恢复

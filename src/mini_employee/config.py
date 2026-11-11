@@ -31,7 +31,7 @@ def load_dotenv(path: Path) -> None:
 
 
 load_dotenv(ROOT / ".env")
-EMPLOYEES_DIR = ROOT / "employees"
+EMPLOYEES_DIR = Path(os.environ.get("MINI_EMPLOYEES") or ROOT / "employees")  # 对比评测时指向改过岗位说明的副本
 ASSETS_DIR = ROOT / "assets"
 
 
