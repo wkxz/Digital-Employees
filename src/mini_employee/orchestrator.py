@@ -687,6 +687,14 @@ class Orchestrator:
             old_resp = content.get("feedback_response")
             content, actions, remaining = program_fix(content, fails, ctx.flat, words)
             gw = self._gateway(task, emp)
+            if remaining and task["artifact"].get("manual"):
+                # 人工修改的版本：只做程序能确定的修正，不让模型改写，避免覆盖人工修改；交回人工继续修改
+                msgs = "；".join(d["msg"] if isinstance(d, dict) else str(d) for r in remaining
+                                for d in [x for x in r.get("details", []) if not (isinstance(x, dict) and x.get("type") == "note")][:3])
+                names = "、".join(r["name"] for r in remaining)
+                self._pause(tid, "step_failed", f"人工修改后的版本质检未通过（{names}）：{msgs or names}。"
+                            "为避免覆盖人工修改，不调用模型改写；请继续修改后重新提交质检。", resume_to=S.QC)
+                return
             if remaining:
                 llm = build_llm(emp.raw.get("model", {}), load_faults(task["meta"].get("faults")))
                 kpis = read_json(d / "work" / "kpis.json")
@@ -721,6 +729,8 @@ class Orchestrator:
         art = self._artifact(task, emp, out["render"], version, tag=Path(out["render"]["texts_path"]).parent.name)
         art["fix_actions"] = out["actions"]
         art["prev_content_path"] = task["artifact"].get("prev_content_path")
+        if task["artifact"].get("manual"):
+            art["manual"] = True
         self.store.update(tid, artifact=art, qc_rounds=n)
         self.store.transition(tid, "fix_done", SYSTEM, {"reason": f"第 {n} 轮修正完成"})
 
@@ -907,6 +917,7 @@ class Orchestrator:
             res = self._render(task, emp, self._gateway(task, emp), content, task["version"], tag, "manual")
             art = self._artifact(task, emp, res, task["version"], tag=tag)
             art["fix_actions"] = ["人工修改内容"]
+            art["manual"] = True  # 质检不通过时只做程序修正，不让模型改写人工修改的内容
             art["prev_content_path"] = (task["artifact"] or {}).get("prev_content_path")
             updates["artifact"] = art
         elif not task.get("artifact"):

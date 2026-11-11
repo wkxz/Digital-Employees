@@ -169,6 +169,8 @@ TRANSITIONS: list[T] = [
       "因审核意见无法落实而暂停：审核人撤回意见，当前版本重新质检"),
     T(S.SUSPENDED, "manual_recheck", S.QC, (INITIATOR, REVIEWER), None,
       "人工补充/修改后重新质检（仍须质检通过才能送审）"),
+    T(S.PENDING_REVIEW, "manual_recheck", S.QC, (INITIATOR, REVIEWER), None,
+      "审核前人工在线修改报告，新版本重新质检（仍须质检通过、再经审核）"),
 ] + [T(s, "cancel", S.CANCELLED, (INITIATOR,), None, "发起人取消") for s in S if s not in TERMINAL]
 
 

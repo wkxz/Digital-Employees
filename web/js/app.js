@@ -9,6 +9,7 @@
   const TERMINAL = ["DELIVERED", "REJECTED", "CANCELLED"];
   const MOOD_OF = { CREATED: "running", ADMISSION: "running", RUNNING: "running", QC: "running", AUTO_FIXING: "running", REWORK: "running", WAITING_INPUT: "waiting", SUSPENDED: "danger", PENDING_REVIEW: "review", DELIVERED: "success", REJECTED: "idle", CANCELLED: "idle" };
   const ORB_OF = Object.assign({}, MOOD_OF, { REJECTED: "muted", CANCELLED: "muted" });
+  const EDITABLE = ["SUSPENDED", "PENDING_REVIEW"]; // 有报告时可人工在线修改，修改后重新质检
   const PROGRESS = { CREATED: 0.05, ADMISSION: 0.14, WAITING_INPUT: 0.2, RUNNING: 0.45, SUSPENDED: 0.5, QC: 0.72, AUTO_FIXING: 0.78, REWORK: 0.6, PENDING_REVIEW: 0.9, DELIVERED: 1, REJECTED: 1, CANCELLED: 1 };
   const ACTOR = { system: "系统", initiator: "发起人", reviewer: "审核人" };
   const I = {
@@ -716,6 +717,7 @@
       </div>
       <div id="dalert"></div>
       <div id="dact"></div>
+      <div id="dedit"></div>
       <div class="card" data-reveal style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot"></span>工作步骤</div><span class="faint" style="font-size:12px">完成的步骤落盘并记录哈希，断点恢复时跳过</span></div><div class="pipeline" id="dpipe" style="--n:${t.steps.length}"></div></div>
       <div class="card" data-reveal style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot"></span>状态轨迹</div><a class="link-arrow" href="#/events/${esc(id)}">完整回放 ${I.arrow}</a></div><div id="dgraph"></div></div>
       <div class="card" data-reveal style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot"></span>实时事件 · 只追加</div><span class="faint mono" style="font-size:12px" id="dcount"></span></div><div class="feed" id="dfeed"></div></div>
@@ -840,6 +842,16 @@
         $$("[data-nodl]", card).forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); FX.toast("演示数据没有实际文件，连接后端后可下载", "info"); }));
         box.appendChild(card);
       }
+      if (EDITABLE.includes(t.state) && t.has_artifact) {
+        const ce = document.createElement("div");
+        ce.className = "card";
+        ce.style.marginTop = "14px";
+        ce.innerHTML = `<div class="row-between" style="gap:16px;flex-wrap:wrap"><div><div class="card-title"><span class="dot" style="background:var(--aqua)"></span>人工修改报告</div>
+          <p class="muted" style="margin:0;font-size:14px">直接在网页上修改报告文字，提交后生成新版本，仍须自动质检通过，再由审核人审核。</p></div>
+          <button class="btn btn-ghost" id="openedit">${roll("在线修改报告")}<span class="arrow">${I.arrow}</span></button></div>`;
+        $("#openedit", ce).addEventListener("click", openEditor);
+        box.appendChild(ce);
+      }
       if (!TERMINAL.includes(t.state)) {
         const c2 = document.createElement("div");
         c2.style.cssText = "margin-top:14px;display:flex;justify-content:flex-end";
@@ -849,6 +861,72 @@
       }
       FX.bind(box);
     };
+    // 人工在线修改报告：编辑占位符原文，实时预览替换后的文字，提交后新版本重新质检
+    async function openEditor() {
+      const host = $("#dedit", root);
+      let data;
+      try { data = await API.get(`/api/tasks/${id}/content`); } catch (e) { FX.toast(e.message, "err"); return; }
+      if (!data.editable) { FX.toast("当前状态不能修改报告", "warn"); return; }
+      const c = JSON.parse(JSON.stringify(data.content));
+      c.anomalies = c.anomalies || [];
+      const AN = [["phenomenon", "现象"], ["cause", "原因"], ["suggestion", "建议"]];
+      const para = (key, i, text, label) => `<div class="ed-item" data-k="${esc(key)}" data-i="${i}"${label ? ` data-f="${esc(label)}"` : ""}>
+          <textarea class="textarea" rows="2" style="min-height:64px">${esc(text)}</textarea>
+          <div class="ed-prev faint" style="font-size:13px;margin:6px 2px 0"></div>
+          ${label ? "" : `<button class="btn btn-ghost btn-sm ed-del" style="margin-top:6px">删除这一段</button>`}</div>`;
+      const secHtml = (s) => `<div class="ed-sec" data-sec="${esc(s.id)}" style="margin-top:22px"><h4 style="margin:0 0 10px">${esc(s.title)}<span class="faint" style="font-weight:400;font-size:12px;margin-left:8px">${s.kind === "bullets" ? "每条一个要点" : "每段一个文本框"}</span></h4>
+          <div class="ed-list" style="display:grid;gap:12px">${(c[s.id] || []).map((x, i) => para(s.id, i, x)).join("")}</div>
+          <button class="btn btn-ghost btn-sm ed-add" data-sec="${esc(s.id)}" style="margin-top:10px">＋ 添加一段</button></div>`;
+      const anHtml = () => c.anomalies.length ? `<div style="margin-top:22px"><h4 style="margin:0 0 10px">${esc(data.anomaly_section)}</h4>
+          ${c.anomalies.map((a, i) => `<div style="margin-bottom:16px"><div class="chip" style="margin-bottom:8px">${esc(a.id)} · ${esc(data.anomaly_labels[a.id] || "")}</div>
+            <div style="display:grid;gap:10px">${AN.map(([f, lab]) => `<div><div class="faint" style="font-size:12px;margin-bottom:4px">${lab}</div>${para("anomalies", i, a[f] || "", f)}</div>`).join("")}</div></div>`).join("")}</div>` : "";
+      host.innerHTML = `<div class="card" style="margin-top:14px"><div class="row-between"><div class="card-title"><span class="dot" style="background:var(--aqua)"></span>在线修改报告 · 当前版本 ${esc(data.tag || "")}</div>
+          <button class="btn btn-ghost btn-sm" id="edclose">收起</button></div>
+        <p class="muted" style="margin:0;font-size:14px"><code>{{…}}</code> 是程序计算的数字，生成 Word 时自动替换（下方灰字为替换后的预览）。请保留占位符，不要手写数字；不存在的占位符会标红。表格、图表和数据质量说明由程序生成，不在这里修改。</p>
+        <div id="edmiss"></div>
+        <div id="edbody">${data.sections.map(secHtml).join("")}${anHtml()}</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:22px;align-items:center"><button class="btn btn-primary" id="edsubmit">${roll("提交修改，重新质检")}<span class="arrow">${I.arrow}</span></button>
+          <span class="faint" style="font-size:13px">提交后生成新版本 → 自动质检 → 通过后进入审核</span></div></div>`;
+      const body = $("#edbody", host);
+      const collect = () => {
+        const out = JSON.parse(JSON.stringify(c));
+        data.sections.forEach((s) => { out[s.id] = $$(`.ed-item[data-k="${s.id}"] textarea`, body).map((x) => x.value); });
+        $$('.ed-item[data-k="anomalies"]', body).forEach((el) => { out.anomalies[+el.dataset.i][el.dataset.f] = $("textarea", el).value; });
+        return out;
+      };
+      let timer = null;
+      const preview = () => {
+        clearTimeout(timer);
+        timer = setTimeout(async () => {
+          let r;
+          try { r = await API.post(`/api/tasks/${id}/preview`, { content: collect() }); } catch (e) { return; }
+          $$(".ed-item", body).forEach((el) => {
+            const k = el.dataset.k, i = +el.dataset.i, f = el.dataset.f;
+            const txt = k === "anomalies" ? ((r.anomalies[(c.anomalies[i] || {}).id] || {})[f] || "") : ((r.texts[k] || [])[i] || "");
+            $(".ed-prev", el).textContent = txt ? "预览：" + txt : "";
+          });
+          $("#edmiss", host).innerHTML = r.missing.length ? `<div class="alert danger" style="margin-top:12px"><span class="a-ico">!</span><h4>以下占位符不存在，提交后质检不会通过</h4><p>${r.missing.map((m) => `<code>{{${esc(m)}}}</code>`).join("　")}</p></div>` : "";
+        }, 350);
+      };
+      const renumber = (sec) => $$(`.ed-item[data-k="${sec}"]`, body).forEach((el, i) => { el.dataset.i = i; });
+      body.addEventListener("input", preview);
+      body.addEventListener("click", (e) => {
+        const del = e.target.closest(".ed-del"), add = e.target.closest(".ed-add");
+        if (del) { const it = del.closest(".ed-item"), k = it.dataset.k; it.remove(); renumber(k); preview(); }
+        if (add) {
+          const k = add.dataset.sec, list = add.previousElementSibling;
+          list.insertAdjacentHTML("beforeend", para(k, list.children.length, ""));
+          $("textarea", list.lastElementChild).focus();
+        }
+      });
+      $("#edclose", host).addEventListener("click", () => { host.innerHTML = ""; });
+      $("#edsubmit", host).addEventListener("click", async (e) => {
+        const ok = await act(e.currentTarget, () => API.post(`/api/tasks/${id}/recheck`, { content: collect(), role: S.role }), "已提交修改，新版本正在重新质检");
+        if (ok) { host.innerHTML = ""; refresh(); }
+      });
+      preview();
+      host.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
     const renderPipe = () => {
       const halted = t.state === "SUSPENDED" || t.state === "WAITING_INPUT";
       $("#dpipe", root).innerHTML = t.steps.map((s, i) => {
@@ -901,6 +979,7 @@
       FX.mood(MOOD_OF[t.state] || "idle");
       orb.set(ORB_OF[t.state] || "idle");
       if (initial) return;
+      if (!EDITABLE.includes(t.state)) $("#dedit", root).innerHTML = "";
       const chip = $("#dmeta .state", root);
       if (chip) FX.scramble(chip, t.label, 600);
       if (t.state === "DELIVERED") { FX.burst(innerWidth / 2, innerHeight / 3, { n: 180 }); FX.pulse(1); orb.wave(); FX.toast("审核通过，已交付", "ok"); }

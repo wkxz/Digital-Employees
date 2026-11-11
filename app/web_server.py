@@ -27,14 +27,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+import jsonschema
+
 from mini_employee import config_admin
 from mini_employee.config import EMPLOYEES_DIR, ROOT, load_employee, read_employee_files, runs_dir
 from mini_employee.fsutil import read_json
 from mini_employee.orchestrator import Orchestrator
 from mini_employee.qc.rules import RULES
-from mini_employee.render import build_blocks, write_md
+from mini_employee.render import anomaly_flat, build_blocks, write_md
 from mini_employee.states import INITIATOR, LABELS, REVIEWER, SYSTEM, TERMINAL, TRANSITIONS, S
-from mini_employee.payloads import FeedbackCheck
+from mini_employee.payloads import TEXT_KINDS, FeedbackCheck
+from mini_employee.placeholders import resolve
 from mini_employee.store import IllegalTransition
 from mini_employee.validate import ConfigError
 
@@ -274,6 +277,63 @@ def api_events(tid: str) -> list[dict[str, Any]]:
             for e in orch().store.events(tid)]
 
 
+EDITABLE = (S.SUSPENDED, S.PENDING_REVIEW)  # 有产物时可人工在线修改报告，修改后重新质检
+AN_FIELDS = ("phenomenon", "cause", "suggestion")
+
+
+def clean_content(content: Any) -> dict[str, Any]:
+    """网页提交的内容：去掉空段落、首尾空白；其余字段（如证据编号、对审核意见的说明）原样保留。"""
+    if not isinstance(content, dict):
+        raise ApiError("修改后的内容格式不正确")
+    out = dict(content)
+    for k, v in content.items():
+        if isinstance(v, list) and all(isinstance(x, str) for x in v):
+            out[k] = [x.strip() for x in v if x.strip()]
+    out["anomalies"] = [{**a, **{f: str(a.get(f) or "").strip() for f in AN_FIELDS}}
+                        for a in content.get("anomalies") or [] if isinstance(a, dict)]
+    return out
+
+
+def api_content(tid: str) -> dict[str, Any]:
+    """当前版本报告的可编辑内容（占位符原文）。"""
+    o = orch()
+    t = o.store.get(tid)
+    if not t["artifact"]:
+        raise ApiError("还没有生成报告", 404)
+    emp = o._emp(t)
+    d = o.task_dir(tid)
+    kp = d / "work" / "kpis.json"
+    labels = {a["id"]: a.get("label", a["id"]) for a in read_json(kp)["anomalies"]} if kp.exists() else {}
+    content = read_json(d / t["artifact"]["content_path"])
+    return {"editable": S(t["state"]) in EDITABLE, "state": t["state"], "tag": t["artifact"].get("tag"),
+            "sections": [{"id": s["id"], "title": s["title"], "kind": s.get("kind", "paragraphs")}
+                         for s in emp.report["sections"] if s.get("kind", "paragraphs") in TEXT_KINDS],
+            "anomaly_section": next((s["title"] for s in emp.report["sections"] if s.get("kind") == "anomalies"), "异常与原因"),
+            "anomaly_labels": labels, "content": content}
+
+
+def api_preview(tid: str, body: dict[str, Any]) -> dict[str, Any]:
+    """把编辑中的内容替换占位符，供网页实时预览；返回无法识别的占位符。"""
+    o = orch()
+    kp = o.task_dir(tid) / "work" / "kpis.json"
+    if not kp.exists():
+        raise ApiError("缺少指标数据，无法预览", 404)
+    flat = anomaly_flat(read_json(kp))
+    missing: list[str] = []
+
+    def r(text: Any) -> str:
+        out, miss = resolve(str(text or ""), flat)
+        missing.extend(miss)
+        return out
+
+    content = body.get("content") or {}
+    texts = {k: [r(x) for x in v] for k, v in content.items()
+             if k != "anomalies" and isinstance(v, list) and all(isinstance(x, str) for x in v)}
+    anomalies = {str(a.get("id")): {f: r(a.get(f)) for f in AN_FIELDS}
+                 for a in content.get("anomalies") or [] if isinstance(a, dict)}
+    return {"texts": texts, "anomalies": anomalies, "missing": sorted(set(missing))}
+
+
 def api_review(tid: str) -> dict[str, Any]:
     o = orch()
     t = o.store.get(tid)
@@ -342,8 +402,14 @@ def api_action(tid: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
     elif action == "retry":
         o.retry(tid, role, clear_faults=bool(body.get("clear_faults", True)), run=False)
         run_bg(tid)
-    elif action == "recheck":
-        o.manual_recheck(tid, None, role, run=False)
+    elif action == "recheck":  # 带 content 表示人工在线修改了报告，修改后的版本重新质检
+        content = body.get("content")
+        if content is not None:
+            content = clean_content(content)
+        try:
+            o.manual_recheck(tid, content, role, run=False)
+        except jsonschema.ValidationError as e:
+            raise ApiError(f"修改后的内容格式不正确：{e.message}") from e
         run_bg(tid)
     elif action == "cancel":
         o.cancel(tid, role)
@@ -409,12 +475,14 @@ ROUTES_GET = [
     (re.compile(r"^/api/tasks/([\w-]+)$"), lambda m, q: api_task(m[1])),
     (re.compile(r"^/api/tasks/([\w-]+)/events$"), lambda m, q: api_events(m[1])),
     (re.compile(r"^/api/tasks/([\w-]+)/review$"), lambda m, q: api_review(m[1])),
+    (re.compile(r"^/api/tasks/([\w-]+)/content$"), lambda m, q: api_content(m[1])),
     (re.compile(r"^/api/faults$"), lambda m, q: api_faults_get()),
     (re.compile(r"^/api/config$"), lambda m, q: api_config_get()),
 ]
 ROUTES_POST = [
     (re.compile(r"^/api/tasks$"), lambda m, b: api_create(b)),
     (re.compile(r"^/api/tasks/([\w-]+)/(supplement|retry|recheck|cancel|review|revise_feedback)$"), lambda m, b: api_action(m[1], m[2], b)),
+    (re.compile(r"^/api/tasks/([\w-]+)/preview$"), lambda m, b: api_preview(m[1], b)),
     (re.compile(r"^/api/faults$"), lambda m, b: api_faults_set(b)),
     (re.compile(r"^/api/config$"), lambda m, b: api_config_save(b)),
 ]
