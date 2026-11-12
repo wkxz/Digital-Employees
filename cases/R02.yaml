@@ -5,7 +5,9 @@ input:
   period: 2026-W44
   files: {sales_file: data/official_a/销售明细.xlsx, minutes_file: data/official_a/周会纪要_2026W44.docx}
 steps:
-  - review: {decision: changes, comments: 华南区促销结束后的下滑原因请再展开}
+  # 本用例测退回次数上限，意见要能落实：不用“展开某区原因”这类意见——模型已引用全部相关纪要时，
+  # 退回前核对会提示“纪要中没有更多依据”，员工也会说明不适用并暂停，结果取决于模型的引用方式
+  - review: {decision: changes, comments: 摘要请补充本周整体目标达成率}
   - review: {decision: changes, comments: 北京海淀店的情况请补充}
   - review: {decision: changes, comments: 下周建议请补充华东区措施}
   - expect: {state: PENDING_REVIEW, version: 4}

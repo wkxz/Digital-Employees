@@ -37,19 +37,20 @@ def anomaly_flat(kpis: dict[str, Any]) -> dict[str, Any]:
 
 
 def _store_names(name: str) -> list[str]:
-    """门店的几种写法，从长到短：全称、去掉“店”、再去掉城市前缀（上海徐汇店 → 上海徐汇 → 徐汇）。"""
+    """门店的几种写法，从长到短：全称、去掉“店”、去掉城市前缀、两者都去掉（上海徐汇店 → 上海徐汇 → 徐汇店 → 徐汇）。"""
     out = [name]
     if name.endswith("店") and len(name) > 2:
         out.append(name[:-1])
         if len(name) > 4:
-            out.append(name[2:-1])
+            out += [name[2:], name[2:-1]]
     return out
 
 
 def _label_drivers(item: dict, drivers: list[dict]) -> None:
-    """带动门店第一次出现时补上门店编码（如“上海静安店（SH02）”）：模型按占位符写门店名，常常不带编码，
-    也会写简称（“徐汇 -19.8%”）或自带括号（“上海静安店（环比下降 17.9%）”，此时编码并入括号）。
-    模型漏写的带动门店（常见于压缩篇幅时）由程序补在“现象”末尾，保证超阈值门店逐一列出。"""
+    """带动门店第一次出现时统一写成“全称（编码）”（如“上海静安店（SH02）”）：模型按占位符写门店名，常常不带编码，
+    也会写简称（“徐汇 -19.8%”，压缩篇幅时尤其常见）或自带括号（“上海静安店（环比下降 17.9%）”，此时编码并入括号）。
+    简称改为全称，与质检“超阈值门店逐一列出”按全称核对的口径一致。
+    模型漏写的带动门店由程序补在“现象”末尾，保证超阈值门店逐一列出。"""
     fields = ("phenomenon", "cause", "suggestion")
     missing = []
     for d in drivers:
@@ -60,14 +61,16 @@ def _label_drivers(item: dict, drivers: list[dict]) -> None:
         done = False
         for alias in _store_names(name):
             for k in fields:
-                m = re.search(re.escape(alias) + r"(?!店)([（(])?", item[k])
+                m = re.search(re.escape(alias) + r"(?!店)(（[^（）]*）|\([^()]*\))?", item[k])
                 if not m:
                     continue
-                if code:
-                    if m.group(1):  # 已有括号：编码并入
-                        item[k] = item[k][:m.end()] + code + "，" + item[k][m.end():]
-                    else:
-                        item[k] = item[k][:m.end()] + f"（{code}）" + item[k][m.end():]
+                inner = m.group(1)[1:-1].strip() if m.group(1) else ""
+                if code and inner and not inner.startswith(code):  # 已有括号：编码并入
+                    inner = f"{code}，{inner}"
+                elif code and not inner:
+                    inner = code
+                new = name + (f"（{inner}）" if inner else "")
+                item[k] = item[k][:m.start()] + new + item[k][m.end():]
                 done = True
                 break
             if done:

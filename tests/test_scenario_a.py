@@ -161,10 +161,28 @@ def test_driver_short_names_and_parentheses_are_recognized():
                {"store": "南京新街口店", "label": "南京新街口店（NJ01）", "wow": -0.148}]
     item = {"phenomenon": "徐汇 -19.8%、南京新街口 -14.8% 同向下滑。", "cause": "", "suggestion": ""}
     _label_drivers(item, drivers)
-    assert item["phenomenon"] == "徐汇（SH01） -19.8%、南京新街口（NJ01） -14.8% 同向下滑。带动门店还有：上海静安店（SH02）环比 -17.7%。"
+    assert item["phenomenon"] == ("上海徐汇店（SH01） -19.8%、南京新街口店（NJ01） -14.8% 同向下滑。"
+                                  "带动门店还有：上海静安店（SH02）环比 -17.7%。")
     item = {"phenomenon": "主要受上海徐汇店（环比下降 19.8%）拖累", "cause": "", "suggestion": ""}
     _label_drivers(item, drivers[:1])
     assert item["phenomenon"] == "主要受上海徐汇店（SH01，环比下降 19.8%）拖累"
+
+
+def test_driver_short_names_expanded_to_full_names():
+    """压缩篇幅时模型常把门店简写（去掉“店”或城市），统一改回全称，质检按全称核对超阈值门店。"""
+    from mini_employee.qc.rules import threshold_coverage
+    from mini_employee.render import _label_drivers
+    drivers = [{"store": "上海徐汇店", "label": "上海徐汇店（SH01）", "wow": -0.198},
+               {"store": "广州海珠店", "label": "广州海珠店（GZ02）", "wow": -0.248},
+               {"store": "成都高新店", "label": "成都高新店（CD02）", "wow": 0.448}]
+    item = {"phenomenon": "上海徐汇（SH01）、海珠店、成都高新环比分别为 -19.8%、-24.8%、+44.8%。", "cause": "", "suggestion": ""}
+    _label_drivers(item, drivers)
+    assert item["phenomenon"] == "上海徐汇店（SH01）、广州海珠店（GZ02）、成都高新店（CD02）环比分别为 -19.8%、-24.8%、+44.8%。"
+    from types import SimpleNamespace
+    ctx = SimpleNamespace(texts={"anomalies": [item["phenomenon"]]},
+                          kpis={"threshold": 0.10, "tables": {"store": [{"name": d["store"], "sales_wow": d["wow"]}
+                                                                        for d in drivers]}})
+    assert threshold_coverage(ctx, {"dimensions": ["store"]})[0]
 
 
 def test_duplicate_unit_after_placeholder_removed():
