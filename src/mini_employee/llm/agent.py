@@ -24,6 +24,8 @@ from ..tools.errors import BAD_ARGS, MISSING_INPUT, ToolDenied, ToolFailure
 from .base import LLM, LLMResponse
 
 Emit = Callable[[str, str | None, dict[str, Any]], None]
+# 实时进度推送的模型输出上限（字符）：网页要从开头解析 JSON 按字段显示，需要完整输出；超长时只保留末尾
+LIVE_TEXT_MAX = 30000
 
 
 class StepLimitExceeded(Exception):
@@ -79,11 +81,11 @@ def build_agent_graph(llm: LLM, gateway: Any, emit: Emit, *, step_id: str, purpo
         write = get_stream_writer()  # 流式输出：模型边生成边推送（外层以 stream 运行时网页可实时看到）
 
         def on_delta(text: str) -> None:
-            write({"type": "model", "step": step_id, "turn": turn, "text": text[-4000:], "done": False})
+            write({"type": "model", "step": step_id, "turn": turn, "text": text[-LIVE_TEXT_MAX:], "done": False})
 
         resp = llm.chat(messages, [] if last_turn else tool_defs,
                         {**meta, "turn": turn, "wrap_up": last_turn, "on_delta": on_delta})
-        write({"type": "model", "step": step_id, "turn": turn, "text": (resp.content or "")[-4000:], "done": True,
+        write({"type": "model", "step": step_id, "turn": turn, "text": (resp.content or "")[-LIVE_TEXT_MAX:], "done": True,
                "tool_calls": [c.name for c in resp.tool_calls]})
         emit("model_called", step_id, {
             "model": llm.name, "purpose": purpose, "turn": turn, "ms": int((time.monotonic() - c0) * 1000),

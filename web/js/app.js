@@ -719,8 +719,8 @@
       <div id="dact"></div>
       <div id="dedit"></div>
       <div class="card" data-reveal style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot"></span>工作步骤</div><span class="faint" style="font-size:12px">完成的步骤落盘并记录哈希，断点恢复时跳过</span></div><div class="pipeline" id="dpipe" style="--n:${t.steps.length}"></div></div>
-      <div class="card" id="dlivecard" style="margin-top:18px;display:none"><div class="row-between"><div class="card-title"><span class="dot"></span>实时进度 · 模型输出</div><span class="faint" style="font-size:12px" id="dlconn">实时推送</span></div><div class="live-nodes" id="dlnodes"></div><div id="dlmodels"></div></div>
       <div class="card" data-reveal style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot"></span>状态轨迹</div><a class="link-arrow" href="#/events/${esc(id)}">完整回放 ${I.arrow}</a></div><div id="dgraph"></div></div>
+      <div class="card" id="dlivecard" style="margin-top:18px;display:none"><div class="row-between"><div class="card-title"><span class="dot"></span>实时进度 · 模型输出</div><div style="display:flex;gap:10px;align-items:center"><span class="faint" style="font-size:12px" id="dlconn">实时推送</span><button class="btn btn-ghost btn-sm" id="dltoggle">收起</button></div></div><div class="live-nodes" id="dlnodes"></div><div class="live-fold faint" id="dlfold"></div><div id="dlmodels"></div></div>
       <div class="card" data-reveal style="margin-top:18px"><div class="row-between"><div class="card-title"><span class="dot"></span>实时事件 · 只追加</div><span class="faint mono" style="font-size:12px" id="dcount"></span></div><div class="feed" id="dfeed"></div></div>
       <div id="dmem"></div>
       <div id="dkpi"></div>`;
@@ -940,6 +940,93 @@
     const live = {};
     const NODE_NAMES = { created: "创建", admission: "准入校验", running: "执行步骤", rework: "返工", qc: "质检", auto_fix: "自动修正", finish: "汇总产物", model: "模型生成", tools: "调用工具", parse: "校验输出" };
     const nodeName = (p) => NODE_NAMES[p] || ((t.steps.find((s) => s.id === p) || {}).name) || p;
+    /* 模型输出按字段显示：流式输出是不完整的 JSON，补齐引号与括号后解析；占位符经 /preview 换成程序算好的数字 */
+    const SEC_TITLES = Object.fromEntries(((S.meta.employee && S.meta.employee.report_sections) || []).map((s) => [s.id, s.title.replace(/^[一二三四五六七八九十]+、/, "")]));
+    const anLabel = (aid) => (((t.kpis && t.kpis.anomalies) || []).find((a) => a.id === aid) || {}).label || "";
+    const FIELDS = [["phenomenon", "现象"], ["cause", "原因"], ["suggestion", "建议"]];
+    const ph = {};          // 占位符 → 替换后的文字（null = 不存在）
+    let phBusy = false;
+    const PH = /\{\{\s*([^{}|]+?)\s*(\|\s*abs)?\s*\}\}/g;
+    const fillPh = (text) => {  // 已知的占位符换成数字（高亮），未知的先显示原文；末尾写了一半的占位符不显示
+      const src = String(text ?? "").replace(/\{\{[^}]*$/, "");
+      let out = "", last = 0;
+      for (const m of src.matchAll(PH)) {
+        out += esc(src.slice(last, m.index));
+        const k = m[1] + (m[2] ? "|abs" : ""), v = ph[k];
+        out += v ? `<b class="lm-ph" title="{{${esc(k)}}}">${esc(v)}</b>` : `<code class="lm-raw-ph${v === null ? " miss" : ""}">${esc(m[0])}</code>`;
+        last = m.index + m[0].length;
+      }
+      return out + esc(src.slice(last));
+    };
+    const loadPh = async (texts) => {  // 收集还没换算过的占位符，交给服务端按报告口径格式化（与 Word 中一致）
+      if (phBusy || !t.kpis) return;
+      const keys = [...new Set(texts.flatMap((x) => [...String(x ?? "").matchAll(PH)].map((m) => m[1] + (m[2] ? "|abs" : ""))))].filter((k) => !(k in ph));
+      if (!keys.length) return;
+      phBusy = true;
+      try {
+        const r = await API.post(`/api/tasks/${id}/preview`, { content: { _ph: keys.map((k) => `{{${k}}}`) } });
+        const miss = new Set(r.missing || []);
+        keys.forEach((k, i) => { ph[k] = miss.has(k.replace(/\|abs$/, "")) ? null : ((r.texts._ph || [])[i] ?? null); });
+      } catch (e) {
+        keys.forEach((k) => { ph[k] = null; });
+      } finally { phBusy = false; }
+      renderLive();
+    };
+    const parsePartial = (text) => {  // 解析流式中的 JSON：先补齐未结束的字符串与括号，不行就退回到上一个完整字段
+      let s = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+      const at = s.search(/[{[]/);
+      if (at < 0) return null;
+      s = s.slice(at);
+      const stack = [], cuts = [];
+      let inStr = false, bs = false;
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (inStr) {
+          if (bs) bs = false;
+          else if (ch === "\\") bs = true;
+          else if (ch === "\"") inStr = false;
+          continue;
+        }
+        if (ch === "\"") inStr = true;
+        else if (ch === "{" || ch === "[") stack.push(ch);
+        else if (ch === "}" || ch === "]") {
+          stack.pop();
+          if (!stack.length) { try { return JSON.parse(s.slice(0, i + 1)); } catch (e) { return null; } }
+        } else if (ch === ",") cuts.push([i, stack.length]);
+      }
+      const close = (n) => stack.slice(0, n).reverse().map((c) => (c === "{" ? "}" : "]")).join("");
+      let head = s;
+      if (inStr) head = (bs ? head.slice(0, -1) : head) + "\"";
+      const tries = [head.replace(/[,:\s]+$/, "") + close(stack.length)];
+      cuts.slice(-4).reverse().forEach(([i, n]) => tries.push(s.slice(0, i) + close(n)));
+      for (const x of tries) { try { return JSON.parse(x); } catch (e) { /* 再退一步 */ } }
+      return null;
+    };
+    const structHtml = (o) => {
+      if (!o || typeof o !== "object" || Array.isArray(o)) return "";
+      const parts = [];
+      (Array.isArray(o.anomalies) ? o.anomalies : []).forEach((a) => {
+        if (!a || typeof a !== "object") return;
+        const rows = FIELDS.filter(([f]) => a[f]).map(([f, lab]) => `<div class="lm-row"><span>${lab}</span><p>${fillPh(a[f])}</p></div>`);
+        if (Array.isArray(a.evidence) && a.evidence.length) rows.push(`<div class="lm-row"><span>依据</span><p>纪要第 ${a.evidence.map(esc).join("、")} 条</p></div>`);
+        parts.push(`<div class="lm-item"><div class="lm-tag">${esc(a.id || "")}${anLabel(a.id) ? " · " + esc(anLabel(a.id)) : ""}</div>${rows.join("")}</div>`);
+      });
+      Object.entries(o).forEach(([k, v]) => {
+        if (k === "anomalies" || k === "feedback_response" || k === "verdicts" || !Array.isArray(v)) return;
+        const items = v.filter((x) => typeof x === "string");
+        if (items.length) parts.push(`<div class="lm-sec"><div class="lm-sec-t">${esc(SEC_TITLES[k] || k)}</div><ul>${items.map((x) => `<li>${fillPh(x)}</li>`).join("")}</ul></div>`);
+      });
+      (Array.isArray(o.verdicts) ? o.verdicts : []).forEach((v) => {
+        if (!v || typeof v !== "object") return;
+        const ok = v.supported === true, label = v.supported === undefined ? "核对中" : ok ? "✓ 有依据" : "✗ 依据不足";
+        parts.push(`<div class="lm-row lm-verdict ${ok ? "ok" : "bad"}"><span>${esc(v.id || "")}${anLabel(v.id) ? " · " + esc(anLabel(v.id)) : ""}</span><p><b>${label}</b>${v.reason ? "：" + esc(v.reason) : ""}</p></div>`);
+      });
+      const fr = (Array.isArray(o.feedback_response) ? o.feedback_response : []).filter((r) => r && typeof r === "object");
+      if (fr.length) parts.push(`<div class="lm-sec"><div class="lm-sec-t">对审核意见的说明</div><ul>${fr.map((r) => `<li><b>${esc(r.instruction || "")}</b>：${r.status === "not_applicable" ? "不适用" : "已落实"}${r.reason ? "，" + fillPh(r.reason) : ""}</li>`).join("")}</ul></div>`);
+      return parts.join("");
+    };
+    let liveOpen = null;  // null：跟随任务状态（运行中展开、结束后收起）；点过按钮后按用户的选择
+    $("#dltoggle", root).addEventListener("click", () => { liveOpen = !(liveOpen ?? AUTO.includes(t.state)); renderLive(); });
     const renderLive = () => {
       const card = $("#dlivecard", root);
       const running = (live.nodes && live.nodes.running) || [];
@@ -947,28 +1034,39 @@
       const models = [...t.steps, ...Object.entries(EXTRA).map(([id, name]) => ({ id, name }))]
         .filter((s) => live["model:" + s.id]).map((s) => [s, live["model:" + s.id]]);
       card.style.display = running.length || models.length ? "" : "none";
+      const open = liveOpen ?? AUTO.includes(t.state);
+      $("#dltoggle", root).textContent = open ? "收起" : "展开";
+      $("#dltoggle", root).style.display = models.length ? "" : "none";
+      $("#dlmodels", root).style.display = open ? "" : "none";
+      $("#dlfold", root).textContent = open || !models.length ? "" : `本次运行共 ${models.length} 段模型输出：${models.map(([s]) => s.name).join("、")}。点击“展开”查看`;
       $("#dlnodes", root).innerHTML = running.length
         ? running.map((l) => `<span class="chip"><i></i>${esc(l.split(" › ").map(nodeName).join(" › "))}</span>`).join("")
         : `<span class="faint" style="font-size:12px">${AUTO.includes(t.state) ? "等待下一个节点…" : "当前没有运行中的节点"}</span>`;
       const box = $("#dlmodels", root);
+      const texts = [];
       models.forEach(([s, m]) => {
         let el = box.querySelector(`[data-step="${s.id}"]`);
         if (!el) {
           el = document.createElement("div");
           el.className = "live-model";
           el.dataset.step = s.id;
-          el.innerHTML = `<div class="lm-head"><b></b><span class="mono"></span></div><pre></pre>`;
+          el.innerHTML = `<div class="lm-head"><b></b><span class="mono"></span></div><div class="lm-body"></div><details class="lm-rawbox"><summary>查看原始输出</summary><pre></pre></details>`;
           box.appendChild(el);
         }
         const on = !m.done && AUTO.includes(t.state);
         el.classList.toggle("on", on);
         el.querySelector("b").textContent = `${s.name} · 第 ${m.turn} 轮`;
         el.querySelector(".mono").textContent = on ? "生成中…" : (m.tool_calls && m.tool_calls.length ? "调用工具：" + m.tool_calls.join("、") : "本轮完成");
-        const pre = el.querySelector("pre");
-        const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
-        pre.textContent = m.text || (m.tool_calls && m.tool_calls.length ? "（本轮只调用工具，没有文字输出）" : "");
-        if (stick) pre.scrollTop = pre.scrollHeight;
+        const body = el.querySelector(".lm-body");
+        const stick = body.scrollTop + body.clientHeight >= body.scrollHeight - 8;
+        const html = structHtml(parsePartial(m.text));
+        body.innerHTML = html || (m.text ? `<p class="lm-plain">${fillPh(m.text)}</p>`
+          : `<p class="faint">${m.tool_calls && m.tool_calls.length ? "（本轮只调用工具，没有文字输出）" : on ? "等待模型输出…" : ""}</p>`);
+        if (stick) body.scrollTop = body.scrollHeight;
+        el.querySelector("pre").textContent = m.text || "";
+        if (m.text) texts.push(m.text);
       });
+      if (texts.length) loadPh(texts);
     };
     const feed = $("#dfeed", root);
     const pushEvents = (list, animate) => {

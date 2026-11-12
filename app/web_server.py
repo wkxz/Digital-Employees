@@ -230,6 +230,8 @@ def api_meta() -> dict[str, Any]:
                                                        "type": s.get("type", "tool"), "tools": s.get("tools") or
                                                        ([s["tool"]] if s.get("tool") else [])} for s in emp.steps],
                            "tools": emp.tools, "limits": emp.raw.get("limits", {}),
+                           "report_sections": [{"id": s["id"], "title": s.get("title", s["id"])}
+                                               for s in emp.report.get("sections", [])],
                            "quality_checks": [{"rule": q.get("rule"),
                                                "name": q.get("name") or RULES.get(q.get("rule"), (q.get("rule"),))[0]}
                                               for q in emp.raw.get("quality_checks", []) if isinstance(q, dict)]}
